@@ -1,6 +1,6 @@
 #!/bin/bash
 
-PROJECT_DIR="/home/dev/data/project/gold-crypto-tracker"
+PROJECT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 echo "Stopping Gold & Crypto Tracker services..."
 

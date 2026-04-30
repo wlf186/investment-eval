@@ -1,6 +1,6 @@
 你正在为 Gold & Crypto Tracker 项目开发后端基础层。我是这个系统的主要用户之一，验收会非常严格。
 
-**项目目录**: /home/dev/data/project/gold-crypto-tracker/
+**项目目录**: ./
 **技术栈**: Python + FastAPI + SQLAlchemy 2.0 + SQLite(aiosqlite) + APScheduler + httpx + pandas + numpy
 **虚拟环境**: 使用 uv（不是conda！不是venv！不是poetry！）
 **端口**: 30305
@@ -10,7 +10,7 @@
 ## 任务要求
 
 ### 1. 创建 uv 虚拟环境并安装依赖
-在 /home/dev/data/project/gold-crypto-tracker/ 目录下运行：
+在 ./ 目录下运行：
 ```bash
 uv venv
 source .venv/bin/activate
@@ -32,7 +32,7 @@ pydantic-settings>=2.1.0
 python-dotenv>=1.0.0
 ```
 
-### 3. 创建后端文件（所有文件必须写入 /home/dev/data/project/gold-crypto-tracker/backend/）
+### 3. 创建后端文件（所有文件必须写入 backend/）
 
 **backend/__init__.py** - 空文件
 
@@ -320,7 +320,7 @@ http_client = AsyncHttpClient()
 ### 4. 验证
 创建完成后，运行：
 ```bash
-cd /home/dev/data/project/gold-crypto-tracker
+cd .
 source .venv/bin/activate
 python -c "from backend.database import init_db; import asyncio; asyncio.run(init_db())"
 ```

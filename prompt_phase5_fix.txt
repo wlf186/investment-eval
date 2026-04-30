@@ -1,6 +1,6 @@
 你正在为 Gold & Crypto Tracker 项目补全缺失功能。我是这个系统的主要用户之一，验收会非常严格。
 
-**项目目录**: /home/dev/data/project/gold-crypto-tracker/
+**项目目录**: ./
 **技术栈**: Python FastAPI + Next.js 14 + Tailwind + Recharts
 
 ## 当前状态

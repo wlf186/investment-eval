@@ -1,6 +1,6 @@
 修复 Gold & Crypto Tracker 的手机端响应式布局。
 
-**项目目录**: /home/dev/data/project/gold-crypto-tracker/frontend/
+**项目目录**: frontend/
 **技术栈**: Next.js 14 + Tailwind CSS
 
 ## 当前问题（从 iPhone 截图发现）

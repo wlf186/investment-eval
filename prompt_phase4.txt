@@ -1,6 +1,6 @@
 你正在为 Gold & Crypto Tracker 项目创建启动脚本和进行集成联调。我是这个系统的主要用户之一，验收会非常严格。
 
-**项目目录**: /home/dev/data/project/gold-crypto-tracker/
+**项目目录**: ./
 **后端**: Python FastAPI, 端口 30305
 **前端**: Next.js, 端口 30306
 
@@ -10,12 +10,12 @@
 
 ### 1. 创建启动脚本 start.sh
 
-写入 /home/dev/data/project/gold-crypto-tracker/start.sh：
+写入 ./start.sh：
 ```bash
 #!/bin/bash
 set -e
 
-PROJECT_DIR="/home/dev/data/project/gold-crypto-tracker"
+PROJECT_DIR="$(cd "$(dirname "$0")" && pwd)"
 BACKEND_PORT=30305
 FRONTEND_PORT=30306
 
@@ -90,11 +90,11 @@ echo "=========================================="
 
 ### 2. 创建停止脚本 stop.sh
 
-写入 /home/dev/data/project/gold-crypto-tracker/stop.sh：
+写入 ./stop.sh：
 ```bash
 #!/bin/bash
 
-PROJECT_DIR="/home/dev/data/project/gold-crypto-tracker"
+PROJECT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 echo "Stopping Gold & Crypto Tracker services..."
 
@@ -129,13 +129,13 @@ echo "✅ All services stopped"
 
 ### 3. 设置可执行权限
 ```bash
-chmod +x /home/dev/data/project/gold-crypto-tracker/start.sh
-chmod +x /home/dev/data/project/gold-crypto-tracker/stop.sh
+chmod +x ./start.sh
+chmod +x ./stop.sh
 ```
 
 ### 4. 创建后端 .env 文件（用于环境变量）
 
-写入 /home/dev/data/project/gold-crypto-tracker/.env：
+写入 ./.env：
 ```
 PORT=30305
 DATABASE_URL=sqlite+aiosqlite:///data/tracker.db
@@ -147,7 +147,7 @@ ANALYSIS_INTERVAL_HOURS=6
 
 先启动后端进行测试：
 ```bash
-cd /home/dev/data/project/gold-crypto-tracker
+cd .
 source .venv/bin/activate
 python -m uvicorn backend.main:app --host 0.0.0.0 --port 30305 &
 UVICORN_PID=$!
