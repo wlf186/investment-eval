@@ -2,6 +2,7 @@ from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
+    # 默认后端端口，可通过 .env 文件中的 PORT 变量覆盖
     PORT: int = 30306
     DATABASE_URL: str = "sqlite+aiosqlite:///data/tracker.db"
     PRICE_UPDATE_INTERVAL_MINUTES: int = 30

@@ -103,4 +103,12 @@ gold-crypto-tracker/
 - 前端开发服务器：`30305`
 - 后端 API：`30306`
 
+> **注意**：以上端口仅为默认值，实际部署时可按需修改。
+>
+> **修改方法**：
+> - **前端端口**：修改 `start.sh` 中的 `FRONTEND_PORT` 变量，并同步修改 `frontend/package.json` 中 `dev` 和 `start` 脚本的 `-p` 参数。
+> - **后端端口**：修改 `.env` 中的 `PORT` 变量、`start.sh` 中的 `BACKEND_PORT` 变量，并同步修改 `frontend/next.config.mjs` 中 rewrite 规则的 `destination` 端口号。
+>
+> `backend/config.py` 中的 `PORT` 默认值为 `30306`，会被 `.env` 中的同名变量覆盖。
+
 前端通过 `next.config.mjs` 的 rewrite 规则将 `/api/*` 代理到后端。

@@ -2,6 +2,7 @@
 set -e
 
 PROJECT_DIR="/home/dev/data/project/gold-crypto-tracker"
+# 默认端口，实际部署时可按需修改
 BACKEND_PORT=30306
 FRONTEND_PORT=30305
 
