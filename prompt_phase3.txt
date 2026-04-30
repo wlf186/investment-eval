@@ -2,7 +2,7 @@
 
 **项目目录**: ./
 **技术栈**: Next.js 14 + TypeScript + Tailwind CSS + shadcn/ui + Recharts
-**后端API**: http://localhost:30305
+**后端API**: /api (通过 Next.js rewrite 代理到后端)
 **端口**: 30306
 
 **极其重要：必须将结果用 Write 工具写入文件，不要只输出到 stdout！**
@@ -36,7 +36,7 @@ npm install -D @types/node
 
 **frontend/src/lib/api.ts**:
 ```typescript
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:30305";
+const API_BASE = ""; // 使用相对路径，由 Next.js rewrite 代理到后端
 
 export async function fetchAPI(path: string, options?: RequestInit) {
   const url = `${API_BASE}${path}`;

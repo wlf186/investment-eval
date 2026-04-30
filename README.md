@@ -112,3 +112,15 @@ gold-crypto-tracker/
 > `backend/config.py` 中的 `PORT` 默认值为 `30306`，会被 `.env` 中的同名变量覆盖。
 
 前端通过 `next.config.mjs` 的 rewrite 规则将 `/api/*` 代理到后端。
+
+## 远程访问注意事项
+
+前端 API 调用必须使用**相对路径**（`API_BASE = ""`），由 Next.js 的 rewrite 规则代理到后端。
+
+**坑点**：若在前端代码中硬编码 `http://localhost:30305`，当用户通过远程 IP 访问页面时，浏览器会在客户端本地寻找后端服务，导致页面数据为空。
+
+**正确做法**：
+- `frontend/src/lib/api.ts` 中使用相对路径发起请求
+- `frontend/next.config.mjs` 配置 rewrite 规则，将 `/api/*` 转发到后端端口
+
+这样无论通过 `localhost` 还是远程 IP 访问，API 请求都会先到达 Next.js 前端服务器，再由其代理到后端，确保前后端衔接正常。

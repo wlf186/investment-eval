@@ -108,3 +108,7 @@ Additional settings (assets, API URLs, fees) are hardcoded in `backend/config.py
 - The backend logs to `backend.log`, frontend to `frontend/frontend.log`.
 - PIDs are tracked in `backend.pid` and `frontend.pid`.
 - When adding new API endpoints, ensure they are registered in `backend/main.py` and proxied in `frontend/next.config.mjs` if needed.
+
+## Remote Access Pitfall
+
+The frontend must use relative API paths (not `http://localhost:30305`). Hardcoding absolute localhost URLs causes the browser to look for the backend on the client's machine when accessed via a remote IP, resulting in empty data. `frontend/src/lib/api.ts` uses `API_BASE = ""` so that Next.js rewrite rules proxy the request to the backend correctly.
