@@ -1,0 +1,84 @@
+你正在为 Gold & Crypto Tracker 项目开发后端基础层。
+
+**项目目录**: /home/dev/data/project/gold-crypto-tracker/
+**技术栈**: Python + FastAPI + SQLAlchemy 2.0 + SQLite + APScheduler + httpx + pandas + numpy
+**虚拟环境**: 使用 uv（不是conda！不是venv！）
+
+**极其重要：必须将结果用 Write 工具写入文件，不要只输出到 stdout！**
+
+## 任务要求
+
+### 1. 创建 uv 虚拟环境并安装依赖
+在 /home/dev/data/project/gold-crypto-tracker/ 目录下运行：
+uv venv
+source .venv/bin/activate
+uv pip install fastapi uvicorn sqlalchemy aiosqlite httpx apscheduler pandas numpy pydantic pydantic-settings python-dotenv
+
+### 2. 创建 requirements.txt
+内容：
+fastapi>=0.109.0
+uvicorn[standard]>=0.27.0
+sqlalchemy>=2.0.25
+aiosqlite>=0.19.0
+httpx>=0.26.0
+apscheduler>=3.10.4
+pandas>=2.1.4
+numpy>=1.26.3
+pydantic>=2.5.3
+pydantic-settings>=2.1.0
+python-dotenv>=1.0.0
+
+### 3. 创建后端文件
+
+**backend/config.py** - 配置管理：
+- PORT = 30305
+- DATABASE_URL = "sqlite+aiosqlite:///data/tracker.db"
+- PRICE_UPDATE_INTERVAL_MINUTES = 30
+- ANALYSIS_INTERVAL_HOURS = 6
+- 所有外部API URL（Binance, gold-api, CoinGecko）
+- 资产列表配置（1个黄金XAU + 10个加密货币BTC/ETH/ADA/SOL/XRP/DOGE/DOT/MATIC/LTC/BCH）
+- 交易手续费配置（maker 0.08%, taker 0.10%）
+- 点差配置（XAU 0.03%, BTC/ETH 0.05%, 其他 0.08%）
+- 最小下单金额 $10
+
+**backend/database.py** - SQLAlchemy异步数据库：
+- 创建 async_engine with aiosqlite
+- AsyncSessionLocal
+- get_db() 依赖函数
+- init_db() 初始化函数创建所有表
+
+**backend/models/price.py** - 价格历史表
+**backend/models/analysis.py** - 技术分析信号表（rsi, macd, macd_signal, bb_upper, bb_lower, bb_middle, ema_12, ema_26, sma_50, trend_direction, signal_strength, key_levels JSON, notes）
+**backend/models/prediction.py** - 预测结果表（symbol, timeframe 24h/7d/30d, prediction_direction, confidence_percent, predicted_change_percent, reasoning, indicators_used JSON, historical_accuracy）
+**backend/models/user.py** - 用户表（name UNIQUE, initial_balance default 10000, current_balance default 10000）
+**backend/models/portfolio.py** - 持仓表（user_id FK, symbol, quantity, avg_buy_price, total_invested）
+**backend/models/transaction.py** - 交易记录表（user_id FK, symbol, transaction_type buy/sell, quantity, price, total_amount, fee_amount, spread_cost, net_amount, profit_loss）
+
+所有模型使用 SQLAlchemy 2.0 声明式基类（declarative_base()），包含完整的字段定义和索引。
+
+**backend/utils/indicators.py** - 技术指标计算函数：
+- calculate_rsi(prices: pd.Series, period=14) -> float
+- calculate_macd(prices: pd.Series, fast=12, slow=26, signal=9) -> tuple
+- calculate_bollinger_bands(prices: pd.Series, period=20, std_dev=2) -> tuple
+- calculate_ema(prices: pd.Series, span: int) -> float
+- calculate_sma(prices: pd.Series, window: int) -> float
+- calculate_atr(high: pd.Series, low: pd.Series, close: pd.Series, period=14) -> float
+全部使用 pandas + numpy 实现，纯计算无外部ML依赖。
+
+**backend/utils/http_client.py** - 异步HTTP客户端：
+- 使用 httpx.AsyncClient
+- 封装 get() 方法带超时和重试
+- 封装 post() 方法
+
+### 4. 文件路径规范
+所有文件必须放在 /home/dev/data/project/gold-crypto-tracker/backend/ 目录下。
+不要放在当前目录或其他位置。
+
+### 5. 验证
+创建完成后，运行验证：
+cd /home/dev/data/project/gold-crypto-tracker
+source .venv/bin/activate
+python -c "from backend.database import init_db; import asyncio; asyncio.run(init_db())"
+确认数据库能正常初始化。
+
+完成后报告所有创建的文件列表和验证结果。

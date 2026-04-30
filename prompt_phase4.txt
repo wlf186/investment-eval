@@ -1,0 +1,177 @@
+你正在为 Gold & Crypto Tracker 项目创建启动脚本和进行集成联调。我是这个系统的主要用户之一，验收会非常严格。
+
+**项目目录**: /home/dev/data/project/gold-crypto-tracker/
+**后端**: Python FastAPI, 端口 30305
+**前端**: Next.js, 端口 30306
+
+**极其重要：必须将结果用 Write 工具写入文件，不要只输出到 stdout！**
+
+## 任务要求
+
+### 1. 创建启动脚本 start.sh
+
+写入 /home/dev/data/project/gold-crypto-tracker/start.sh：
+```bash
+#!/bin/bash
+set -e
+
+PROJECT_DIR="/home/dev/data/project/gold-crypto-tracker"
+BACKEND_PORT=30305
+FRONTEND_PORT=30306
+
+echo "=========================================="
+echo "Gold & Crypto Tracker - Starting services"
+echo "=========================================="
+
+# 检查端口占用
+if lsof -Pi :$BACKEND_PORT -sTCP:LISTEN -t > /dev/null 2>&1; then
+    echo "⚠️  Backend port $BACKEND_PORT is already in use. Stopping existing process..."
+    kill $(lsof -Pi :$BACKEND_PORT -sTCP:LISTEN -t) 2>/dev/null || true
+    sleep 1
+fi
+
+if lsof -Pi :$FRONTEND_PORT -sTCP:LISTEN -t > /dev/null 2>&1; then
+    echo "⚠️  Frontend port $FRONTEND_PORT is already in use. Stopping existing process..."
+    kill $(lsof -Pi :$FRONTEND_PORT -sTCP:LISTEN -t) 2>/dev/null || true
+    sleep 1
+fi
+
+# 启动后端
+echo "🚀 Starting backend on port $BACKEND_PORT..."
+cd "$PROJECT_DIR"
+source .venv/bin/activate
+nohup python -m uvicorn backend.main:app --host 0.0.0.0 --port $BACKEND_PORT --reload > backend.log 2>&1 &
+BACKEND_PID=$!
+echo $BACKEND_PID > backend.pid
+echo "   Backend PID: $BACKEND_PID"
+
+# 等待后端启动
+sleep 3
+if kill -0 $BACKEND_PID 2>/dev/null; then
+    echo "   ✅ Backend is running"
+else
+    echo "   ❌ Backend failed to start. Check backend.log"
+    exit 1
+fi
+
+# 启动前端
+echo "🚀 Starting frontend on port $FRONTEND_PORT..."
+cd "$PROJECT_DIR/frontend"
+source ~/.nvm/nvm.sh && nvm use 24
+nohup npm run dev > frontend.log 2>&1 &
+FRONTEND_PID=$!
+echo $FRONTEND_PID > ../frontend.pid
+echo "   Frontend PID: $FRONTEND_PID"
+
+# 等待前端启动
+sleep 5
+if kill -0 $FRONTEND_PID 2>/dev/null; then
+    echo "   ✅ Frontend is running"
+else
+    echo "   ❌ Frontend failed to start. Check frontend.log"
+    exit 1
+fi
+
+echo ""
+echo "=========================================="
+echo "✅ All services started successfully!"
+echo "=========================================="
+echo "Backend API:  http://localhost:$BACKEND_PORT"
+echo "Frontend:     http://localhost:$FRONTEND_PORT"
+echo "Health Check: http://localhost:$BACKEND_PORT/health"
+echo ""
+echo "Logs:"
+echo "  Backend:  $PROJECT_DIR/backend.log"
+echo "  Frontend: $PROJECT_DIR/frontend/frontend.log"
+echo ""
+echo "To stop: ./stop.sh"
+echo "=========================================="
+```
+
+### 2. 创建停止脚本 stop.sh
+
+写入 /home/dev/data/project/gold-crypto-tracker/stop.sh：
+```bash
+#!/bin/bash
+
+PROJECT_DIR="/home/dev/data/project/gold-crypto-tracker"
+
+echo "Stopping Gold & Crypto Tracker services..."
+
+# 停止后端
+if [ -f "$PROJECT_DIR/backend.pid" ]; then
+    PID=$(cat "$PROJECT_DIR/backend.pid")
+    if kill -0 $PID 2>/dev/null; then
+        echo "Stopping backend (PID: $PID)..."
+        kill $PID
+        rm "$PROJECT_DIR/backend.pid"
+    else
+        echo "Backend not running"
+        rm -f "$PROJECT_DIR/backend.pid"
+    fi
+fi
+
+# 停止前端
+if [ -f "$PROJECT_DIR/frontend.pid" ]; then
+    PID=$(cat "$PROJECT_DIR/frontend.pid")
+    if kill -0 $PID 2>/dev/null; then
+        echo "Stopping frontend (PID: $PID)..."
+        kill $PID
+        rm "$PROJECT_DIR/frontend.pid"
+    else
+        echo "Frontend not running"
+        rm -f "$PROJECT_DIR/frontend.pid"
+    fi
+fi
+
+echo "✅ All services stopped"
+```
+
+### 3. 设置可执行权限
+```bash
+chmod +x /home/dev/data/project/gold-crypto-tracker/start.sh
+chmod +x /home/dev/data/project/gold-crypto-tracker/stop.sh
+```
+
+### 4. 创建后端 .env 文件（用于环境变量）
+
+写入 /home/dev/data/project/gold-crypto-tracker/.env：
+```
+PORT=30305
+DATABASE_URL=sqlite+aiosqlite:///data/tracker.db
+PRICE_UPDATE_INTERVAL_MINUTES=30
+ANALYSIS_INTERVAL_HOURS=6
+```
+
+### 5. 验证端到端联调
+
+先启动后端进行测试：
+```bash
+cd /home/dev/data/project/gold-crypto-tracker
+source .venv/bin/activate
+python -m uvicorn backend.main:app --host 0.0.0.0 --port 30305 &
+UVICORN_PID=$!
+sleep 3
+
+# 测试健康检查
+curl -s http://localhost:30305/health | python -m json.tool
+
+# 测试资产列表
+curl -s http://localhost:30305/api/assets | python -m json.tool
+
+# 测试价格API（如果已有价格数据）
+curl -s http://localhost:30305/api/prices/latest | python -m json.tool
+
+# 停止测试进程
+kill $UVICORN_PID 2>/dev/null
+```
+
+### 6. 文件清单确认
+完成后报告以下文件是否全部创建：
+- [ ] start.sh
+- [ ] stop.sh
+- [ ] .env
+- [ ] start.sh 有执行权限
+- [ ] stop.sh 有执行权限
+- [ ] 后端健康检查 curl 测试通过
+- [ ] 后端资产列表 curl 测试通过

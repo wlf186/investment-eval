@@ -1,0 +1,679 @@
+你正在为 Gold & Crypto Tracker 项目补全缺失功能。我是这个系统的主要用户之一，验收会非常严格。
+
+**项目目录**: /home/dev/data/project/gold-crypto-tracker/
+**已有基础**: 后端基础层+业务层已完成，前端基础页面已完成
+**技术栈**: Python FastAPI + Next.js 14 + Tailwind + Recharts
+
+**极其重要：必须将结果用 Write 工具写入文件，不要只输出到 stdout！**
+
+## 任务1: 后端补全
+
+### 1.1 创建排行榜服务 backend/services/leaderboard_service.py
+
+```python
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select, desc
+from backend.database import AsyncSessionLocal
+from backend.models.user import User
+from backend.models.portfolio import Portfolio
+from backend.models.transaction import Transaction
+from backend.services.price_service import price_service
+
+class LeaderboardService:
+    async def get_leaderboard(self, limit: int = 10) -> list[dict]:
+        """获取TOP N排行榜"""
+        async with AsyncSessionLocal() as session:
+            # 获取所有用户
+            query = select(User)
+            result = await session.execute(query)
+            users = result.scalars().all()
+            
+            rankings = []
+            for user in users:
+                # 计算用户总资产
+                from backend.services.trading_service import trading_service
+                portfolio_data = await trading_service.get_portfolio(session, user.id)
+                
+                if "error" not in portfolio_data:
+                    rankings.append({
+                        "user_id": user.id,
+                        "name": user.name,
+                        "total_value": portfolio_data.get("total_value", user.initial_balance),
+                        "initial_balance": portfolio_data.get("total_invested", user.initial_balance),
+                        "return_pct": portfolio_data.get("total_pnl_percent", 0.0),
+                        "balance": portfolio_data.get("balance", user.current_balance),
+                        "holdings_count": len(portfolio_data.get("holdings", []))
+                    })
+            
+            # 按收益率排序
+            rankings.sort(key=lambda x: x["return_pct"], reverse=True)
+            
+            # 添加排名
+            for i, r in enumerate(rankings[:limit], 1):
+                r["rank"] = i
+            
+            return rankings[:limit]
+
+leaderboard_service = LeaderboardService()
+```
+
+### 1.2 创建用户路由 backend/routers/users.py
+
+```python
+from fastapi import APIRouter, Depends
+from sqlalchemy.ext.asyncio import AsyncSession
+from backend.database import get_db
+from backend.models.user import User
+from backend.services.trading_service import trading_service
+from sqlalchemy import select
+
+router = APIRouter(prefix="/api/users", tags=["users"])
+
+@router.post("/")
+async def create_user(name: str, initial_balance: float = 10000.0, session: AsyncSession = Depends(get_db)):
+    """创建新用户"""
+    # 检查用户名是否已存在
+    query = select(User).where(User.name == name)
+    result = await session.execute(query)
+    existing = result.scalar_one_or_none()
+    
+    if existing:
+        return {"error": "Username already exists", "user_id": existing.id}
+    
+    user = User(name=name, initial_balance=initial_balance, current_balance=initial_balance)
+    session.add(user)
+    await session.commit()
+    await session.refresh(user)
+    
+    return {
+        "user_id": user.id,
+        "name": user.name,
+        "initial_balance": user.initial_balance,
+        "current_balance": user.current_balance,
+        "created_at": user.created_at.isoformat() if user.created_at else None
+    }
+
+@router.get("/{user_id}")
+async def get_user(user_id: int, session: AsyncSession = Depends(get_db)):
+    """获取用户信息"""
+    query = select(User).where(User.id == user_id)
+    result = await session.execute(query)
+    user = result.scalar_one_or_none()
+    
+    if not user:
+        return {"error": "User not found"}
+    
+    # 获取portfolio数据
+    portfolio = await trading_service.get_portfolio(session, user_id)
+    
+    return {
+        "user_id": user.id,
+        "name": user.name,
+        "initial_balance": user.initial_balance,
+        "current_balance": user.current_balance,
+        "total_value": portfolio.get("total_value", user.current_balance),
+        "total_pnl": portfolio.get("total_pnl", 0),
+        "total_pnl_percent": portfolio.get("total_pnl_percent", 0),
+        "holdings_count": len(portfolio.get("holdings", [])),
+        "created_at": user.created_at.isoformat() if user.created_at else None
+    }
+
+@router.get("/")
+async def list_users(session: AsyncSession = Depends(get_db)):
+    """列出所有用户"""
+    query = select(User).order_by(User.id)
+    result = await session.execute(query)
+    users = result.scalars().all()
+    
+    return {
+        "users": [
+            {
+                "user_id": u.id,
+                "name": u.name,
+                "initial_balance": u.initial_balance,
+                "current_balance": u.current_balance,
+                "created_at": u.created_at.isoformat() if u.created_at else None
+            }
+            for u in users
+        ]
+    }
+```
+
+### 1.3 创建排行榜路由 backend/routers/leaderboard.py
+
+```python
+from fastapi import APIRouter
+from backend.services.leaderboard_service import leaderboard_service
+
+router = APIRouter(prefix="/api/leaderboard", tags=["leaderboard"])
+
+@router.get("/")
+async def get_leaderboard(limit: int = 10):
+    """获取排行榜 TOP N"""
+    rankings = await leaderboard_service.get_leaderboard(limit)
+    return {
+        "rankings": rankings,
+        "total_users": len(rankings)
+    }
+```
+
+### 1.4 更新 backend/main.py 注册新路由
+
+在 main.py 中，找到现有的 router 注册代码，添加：
+```python
+from backend.routers import users, leaderboard
+
+# 在 app.include_router 部分添加：
+app.include_router(users.router)
+app.include_router(leaderboard.router)
+```
+
+## 任务2: 前端补全
+
+### 2.1 创建暗色主题全局样式
+
+**frontend/src/app/globals.css** 替换为暗色主题：
+```css
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg-primary: #0f172a;
+  --bg-card: #1e293b;
+  --bg-hover: #334155;
+  --text-primary: #f8fafc;
+  --text-secondary: #94a3b8;
+  --accent-gold: #f59e0b;
+  --accent-green: #22c55e;
+  --accent-red: #ef4444;
+  --accent-blue: #3b82f6;
+  --border: #334155;
+}
+
+body {
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
+}
+```
+
+### 2.2 创建预测中心页面 frontend/src/app/predictions/page.tsx
+
+```tsx
+"use client";
+
+import { useEffect, useState } from "react";
+import { fetchAPI } from "@/lib/api";
+import Link from "next/link";
+import { ArrowLeft, TrendingUp, TrendingDown, Minus, Clock } from "lucide-react";
+
+interface Prediction {
+  symbol: string;
+  name: string;
+  timeframe: string;
+  direction: string;
+  confidence: number;
+  predicted_change: number;
+  reasoning: string;
+  generated_at: string;
+}
+
+export default function PredictionsPage() {
+  const [predictions, setPredictions] = useState<Prediction[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    async function loadPredictions() {
+      try {
+        // 获取资产列表
+        const assetsData = await fetchAPI("/api/assets");
+        const allAssets = [
+          ...assetsData.gold.map((a: any) => ({ symbol: a.symbol, name: a.name })),
+          ...assetsData.crypto.map((a: any) => ({ symbol: a.symbol, name: a.name }))
+        ];
+        
+        // 获取每个资产的预测
+        const allPredictions: Prediction[] = [];
+        for (const asset of allAssets) {
+          try {
+            const data = await fetchAPI(`/api/analysis/predictions/${asset.symbol}`);
+            if (data.predictions) {
+              for (const p of data.predictions) {
+                allPredictions.push({
+                  symbol: asset.symbol,
+                  name: asset.name,
+                  ...p
+                });
+              }
+            }
+          } catch (e) {
+            // 忽略单个资产错误
+          }
+        }
+        
+        setPredictions(allPredictions);
+      } catch (e) {
+        console.error("Failed to load predictions:", e);
+      } finally {
+        setLoading(false);
+      }
+    }
+    loadPredictions();
+  }, []);
+
+  const timeframes = ["24h", "7d", "30d"];
+  
+  return (
+    <main className="min-h-screen bg-[#0f172a] text-[#f8fafc] p-6">
+      <div className="max-w-7xl mx-auto">
+        <Link href="/" className="flex items-center gap-2 text-[#94a3b8] hover:text-[#f8fafc] mb-6">
+          <ArrowLeft className="w-4 h-4" />
+          Back to Dashboard
+        </Link>
+        
+        <h1 className="text-3xl font-bold mb-8 flex items-center gap-2">
+          <TrendingUp className="w-8 h-8 text-[#3b82f6]" />
+          Predictions Center
+        </h1>
+        
+        {timeframes.map(tf => {
+          const tfPredictions = predictions.filter(p => p.timeframe === tf);
+          return (
+            <section key={tf} className="mb-8">
+              <h2 className="text-xl font-semibold mb-4 flex items-center gap-2">
+                <Clock className="w-5 h-5 text-[#f59e0b]" />
+                {tf === "24h" ? "24 Hours" : tf === "7d" ? "7 Days" : "30 Days"} Forecast
+              </h2>
+              
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {tfPredictions.map(p => (
+                  <div key={`${p.symbol}-${tf}`} className="bg-[#1e293b] rounded-lg p-4 border border-[#334155]">
+                    <div className="flex justify-between items-start mb-2">
+                      <div>
+                        <h3 className="font-semibold">{p.name}</h3>
+                        <span className="text-sm text-[#94a3b8]">{p.symbol}</span>
+                      </div>
+                      <div className={`flex items-center gap-1 ${p.direction === "up" ? "text-[#22c55e]" : p.direction === "down" ? "text-[#ef4444]" : "text-[#94a3b8]"}`}>
+                        {p.direction === "up" ? <TrendingUp className="w-4 h-4" /> : p.direction === "down" ? <TrendingDown className="w-4 h-4" /> : <Minus className="w-4 h-4" />}
+                        {p.direction}
+                      </div>
+                    </div>
+                    
+                    <div className="grid grid-cols-2 gap-2 mb-3">
+                      <div className="bg-[#0f172a] rounded p-2">
+                        <p className="text-xs text-[#94a3b8]">Confidence</p>
+                        <p className="text-lg font-bold">{p.confidence}%</p>
+                      </div>
+                      <div className="bg-[#0f172a] rounded p-2">
+                        <p className="text-xs text-[#94a3b8]">Expected Change</p>
+                        <p className={`text-lg font-bold ${p.predicted_change > 0 ? "text-[#22c55e]" : p.predicted_change < 0 ? "text-[#ef4444]" : ""}`}>
+                          {p.predicted_change > 0 ? "+" : ""}{p.predicted_change}%
+                        </p>
+                      </div>
+                    </div>
+                    
+                    <p className="text-xs text-[#94a3b8]">{p.reasoning}</p>
+                  </div>
+                ))}
+              </div>
+            </section>
+          );
+        })}
+      </div>
+    </main>
+  );
+}
+```
+
+### 2.3 创建排行榜页面 frontend/src/app/leaderboard/page.tsx
+
+```tsx
+"use client";
+
+import { useEffect, useState } from "react";
+import { fetchAPI } from "@/lib/api";
+import Link from "next/link";
+import { ArrowLeft, Trophy, TrendingUp, TrendingDown, Medal } from "lucide-react";
+
+interface Ranking {
+  rank: number;
+  user_id: number;
+  name: string;
+  total_value: number;
+  return_pct: number;
+  balance: number;
+  holdings_count: number;
+}
+
+export default function LeaderboardPage() {
+  const [rankings, setRankings] = useState<Ranking[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    async function loadLeaderboard() {
+      try {
+        const data = await fetchAPI("/api/leaderboard?limit=10");
+        setRankings(data.rankings || []);
+      } catch (e) {
+        console.error("Failed to load leaderboard:", e);
+      } finally {
+        setLoading(false);
+      }
+    }
+    loadLeaderboard();
+  }, []);
+
+  const getRankIcon = (rank: number) => {
+    if (rank === 1) return <Trophy className="w-5 h-5 text-[#f59e0b]" />;
+    if (rank === 2) return <Medal className="w-5 h-5 text-[#94a3b8]" />;
+    if (rank === 3) return <Medal className="w-5 h-5 text-[#b45309]" />;
+    return <span className="w-5 h-5 flex items-center justify-center text-sm text-[#94a3b8]">{rank}</span>;
+  };
+
+  return (
+    <main className="min-h-screen bg-[#0f172a] text-[#f8fafc] p-6">
+      <div className="max-w-4xl mx-auto">
+        <Link href="/" className="flex items-center gap-2 text-[#94a3b8] hover:text-[#f8fafc] mb-6">
+          <ArrowLeft className="w-4 h-4" />
+          Back to Dashboard
+        </Link>
+        
+        <h1 className="text-3xl font-bold mb-8 flex items-center gap-2">
+          <Trophy className="w-8 h-8 text-[#f59e0b]" />
+          Leaderboard
+        </h1>
+        
+        <div className="bg-[#1e293b] rounded-lg border border-[#334155] overflow-hidden">
+          <table className="w-full">
+            <thead className="bg-[#0f172a]">
+              <tr>
+                <th className="text-left p-4 text-[#94a3b8] font-medium">Rank</th>
+                <th className="text-left p-4 text-[#94a3b8] font-medium">Trader</th>
+                <th className="text-right p-4 text-[#94a3b8] font-medium">Total Value</th>
+                <th className="text-right p-4 text-[#94a3b8] font-medium">Return</th>
+                <th className="text-right p-4 text-[#94a3b8] font-medium">Holdings</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rankings.map((r) => (
+                <tr key={r.user_id} className="border-t border-[#334155] hover:bg-[#334155]/50">
+                  <td className="p-4">{getRankIcon(r.rank)}</td>
+                  <td className="p-4">
+                    <span className="font-medium">{r.name}</span>
+                  </td>
+                  <td className="p-4 text-right">
+                    ${r.total_value?.toLocaleString("en-US", { minimumFractionDigits: 2 })}
+                  </td>
+                  <td className="p-4 text-right">
+                    <span className={`flex items-center justify-end gap-1 ${r.return_pct >= 0 ? "text-[#22c55e]" : "text-[#ef4444]"}`}>
+                      {r.return_pct >= 0 ? <TrendingUp className="w-4 h-4" /> : <TrendingDown className="w-4 h-4" />}
+                      {r.return_pct >= 0 ? "+" : ""}{r.return_pct?.toFixed(2)}%
+                    </span>
+                  </td>
+                  <td className="p-4 text-right text-[#94a3b8]">{r.holdings_count}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </main>
+  );
+}
+```
+
+### 2.4 创建独立交易页面 frontend/src/app/trade/page.tsx
+
+```tsx
+"use client";
+
+import { useEffect, useState } from "react";
+import { fetchAPI } from "@/lib/api";
+import Link from "next/link";
+import { ArrowLeft, ArrowUpCircle, ArrowDownCircle, Wallet } from "lucide-react";
+
+interface Asset {
+  symbol: string;
+  name: string;
+  price: number;
+  change_24h: number;
+}
+
+export default function TradePage() {
+  const [assets, setAssets] = useState<Asset[]>([]);
+  const [selectedSymbol, setSelectedSymbol] = useState("");
+  const [quantity, setQuantity] = useState("");
+  const [portfolio, setPortfolio] = useState<any>(null);
+  const [loading, setLoading] = useState(true);
+  const [result, setResult] = useState<any>(null);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    async function loadData() {
+      try {
+        const [pricesData, portfolioData] = await Promise.all([
+          fetchAPI("/api/prices/latest"),
+          fetchAPI("/api/trading/portfolio")
+        ]);
+        setAssets(pricesData.prices || []);
+        setPortfolio(portfolioData);
+        if (pricesData.prices?.length > 0) {
+          setSelectedSymbol(pricesData.prices[0].symbol);
+        }
+      } catch (e) {
+        console.error("Failed to load data:", e);
+      } finally {
+        setLoading(false);
+      }
+    }
+    loadData();
+  }, []);
+
+  async function handleBuy() {
+    setError("");
+    setResult(null);
+    try {
+      const data = await fetchAPI(`/api/trading/buy?symbol=${selectedSymbol}&quantity=${quantity}`, { method: "POST" });
+      if (data.success) {
+        setResult({ ...data, type: "buy" });
+        // 刷新portfolio
+        const portfolioData = await fetchAPI("/api/trading/portfolio");
+        setPortfolio(portfolioData);
+      } else {
+        setError(data.error || "Buy failed");
+      }
+    } catch (e: any) {
+      setError(e.message);
+    }
+  }
+
+  async function handleSell() {
+    setError("");
+    setResult(null);
+    try {
+      const data = await fetchAPI(`/api/trading/sell?symbol=${selectedSymbol}&quantity=${quantity}`, { method: "POST" });
+      if (data.success) {
+        setResult({ ...data, type: "sell" });
+        const portfolioData = await fetchAPI("/api/trading/portfolio");
+        setPortfolio(portfolioData);
+      } else {
+        setError(data.error || "Sell failed");
+      }
+    } catch (e: any) {
+      setError(e.message);
+    }
+  }
+
+  const selectedAsset = assets.find(a => a.symbol === selectedSymbol);
+
+  return (
+    <main className="min-h-screen bg-[#0f172a] text-[#f8fafc] p-6">
+      <div className="max-w-4xl mx-auto">
+        <Link href="/" className="flex items-center gap-2 text-[#94a3b8] hover:text-[#f8fafc] mb-6">
+          <ArrowLeft className="w-4 h-4" />
+          Back to Dashboard
+        </Link>
+        
+        <h1 className="text-3xl font-bold mb-8 flex items-center gap-2">
+          <Wallet className="w-8 h-8 text-[#3b82f6]" />
+          Trading
+        </h1>
+        
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          {/* Trading Form */}
+          <div className="bg-[#1e293b] rounded-lg p-6 border border-[#334155]">
+            <h2 className="text-lg font-semibold mb-4">Place Order</h2>
+            
+            <div className="mb-4">
+              <label className="block text-sm text-[#94a3b8] mb-2">Asset</label>
+              <select
+                value={selectedSymbol}
+                onChange={(e) => setSelectedSymbol(e.target.value)}
+                className="w-full bg-[#0f172a] border border-[#334155] rounded-lg px-3 py-2 text-[#f8fafc]"
+              >
+                {assets.map(a => (
+                  <option key={a.symbol} value={a.symbol}>{a.name} ({a.symbol})</option>
+                ))}
+              </select>
+            </div>
+            
+            {selectedAsset && (
+              <div className="mb-4 bg-[#0f172a] rounded-lg p-3">
+                <p className="text-sm text-[#94a3b8]">Current Price</p>
+                <p className="text-xl font-bold">${selectedAsset.price?.toLocaleString("en-US", { minimumFractionDigits: 2 })}</p>
+                <p className={`text-sm ${selectedAsset.change_24h >= 0 ? "text-[#22c55e]" : "text-[#ef4444]"}`}>
+                  {selectedAsset.change_24h >= 0 ? "+" : ""}{selectedAsset.change_24h?.toFixed(2)}%
+                </p>
+              </div>
+            )}
+            
+            <div className="mb-4">
+              <label className="block text-sm text-[#94a3b8] mb-2">Quantity</label>
+              <input
+                type="number"
+                step="0.0001"
+                value={quantity}
+                onChange={(e) => setQuantity(e.target.value)}
+                className="w-full bg-[#0f172a] border border-[#334155] rounded-lg px-3 py-2 text-[#f8fafc]"
+                placeholder="Enter quantity..."
+              />
+            </div>
+            
+            <div className="grid grid-cols-2 gap-3">
+              <button
+                onClick={handleBuy}
+                disabled={!quantity}
+                className="flex items-center justify-center gap-2 bg-[#22c55e] text-white py-2 px-4 rounded-lg hover:bg-[#16a34a] disabled:opacity-50"
+              >
+                <ArrowUpCircle className="w-4 h-4" />
+                Buy
+              </button>
+              <button
+                onClick={handleSell}
+                disabled={!quantity}
+                className="flex items-center justify-center gap-2 bg-[#ef4444] text-white py-2 px-4 rounded-lg hover:bg-[#dc2626] disabled:opacity-50"
+              >
+                <ArrowDownCircle className="w-4 h-4" />
+                Sell
+              </button>
+            </div>
+            
+            {error && <p className="mt-3 text-sm text-[#ef4444]">{error}</p>}
+            {result && (
+              <div className={`mt-3 rounded-lg p-3 ${result.type === "buy" ? "bg-[#22c55e]/20" : "bg-[#ef4444]/20"}`}>
+                <p className="text-sm font-medium">{result.type === "buy" ? "Buy" : "Sell"} successful!</p>
+                <p className="text-xs text-[#94a3b8]">{result.quantity} {result.symbol} @ ${result.price?.toFixed(2)}</p>
+                <p className="text-xs text-[#94a3b8]">Balance: ${result.remaining_balance?.toFixed(2)}</p>
+              </div>
+            )}
+          </div>
+          
+          {/* Portfolio Summary */}
+          <div className="bg-[#1e293b] rounded-lg p-6 border border-[#334155]">
+            <h2 className="text-lg font-semibold mb-4">Your Portfolio</h2>
+            
+            {portfolio && (
+              <>
+                <div className="grid grid-cols-2 gap-3 mb-4">
+                  <div className="bg-[#0f172a] rounded-lg p-3">
+                    <p className="text-xs text-[#94a3b8]">Balance</p>
+                    <p className="text-lg font-bold">${portfolio.balance?.toFixed(2)}</p>
+                  </div>
+                  <div className="bg-[#0f172a] rounded-lg p-3">
+                    <p className="text-xs text-[#94a3b8]">Total Value</p>
+                    <p className="text-lg font-bold">${portfolio.total_value?.toFixed(2)}</p>
+                  </div>
+                </div>
+                
+                {portfolio.holdings && portfolio.holdings.length > 0 ? (
+                  <div className="space-y-2">
+                    {portfolio.holdings.map((h: any) => (
+                      <div key={h.symbol} className="bg-[#0f172a] rounded-lg p-3 flex justify-between">
+                        <div>
+                          <p className="font-medium">{h.asset_name}</p>
+                          <p className="text-xs text-[#94a3b8]">{h.quantity?.toFixed(4)} @ ${h.avg_buy_price?.toFixed(2)}</p>
+                        </div>
+                        <div className="text-right">
+                          <p className="font-medium">${h.market_value?.toFixed(2)}</p>
+                          <p className={`text-xs ${h.pnl >= 0 ? "text-[#22c55e]" : "text-[#ef4444]"}`}>
+                            {h.pnl >= 0 ? "+" : ""}{h.pnl?.toFixed(2)}
+                          </p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-[#94a3b8] text-sm">No holdings yet. Start trading!</p>
+                )}
+              </>
+            )}
+          </div>
+        </div>
+      </div>
+    </main>
+  );
+}
+```
+
+### 2.5 更新首页 frontend/src/app/page.tsx 为暗色主题 + 导航链接
+
+把现有 page.tsx 的背景色从 `bg-gray-50` 改为 `bg-[#0f172a]`，文字颜色改为 `text-[#f8fafc]`，并添加导航链接到 /trade、/leaderboard、/predictions。
+
+### 2.6 更新所有现有组件为暗色主题
+
+- PriceCard.tsx: 背景 `bg-[#1e293b]`，边框 `border-[#334155]`
+- PortfolioSummary.tsx: 暗色主题适配
+- PriceChart.tsx: 暗色主题适配
+- AnalysisPanel.tsx: 暗色主题适配
+- TradingPanel.tsx: 暗色主题适配
+
+### 2.7 更新 asset/[symbol]/page.tsx 为暗色主题
+
+## 任务3: 验证
+
+创建所有文件后，运行：
+```bash
+cd /home/dev/data/project/gold-crypto-tracker/frontend
+npm run build
+```
+
+确认构建成功。
+
+## 文件清单确认
+完成后报告以下文件是否全部创建/修改：
+- [ ] backend/services/leaderboard_service.py
+- [ ] backend/routers/users.py
+- [ ] backend/routers/leaderboard.py
+- [ ] backend/main.py (已更新路由)
+- [ ] frontend/src/app/globals.css (暗色主题)
+- [ ] frontend/src/app/predictions/page.tsx
+- [ ] frontend/src/app/leaderboard/page.tsx
+- [ ] frontend/src/app/trade/page.tsx
+- [ ] frontend/src/app/page.tsx (暗色+导航)
+- [ ] frontend/src/components/PriceCard.tsx (暗色)
+- [ ] frontend/src/components/PortfolioSummary.tsx (暗色)
+- [ ] frontend/src/components/PriceChart.tsx (暗色)
+- [ ] frontend/src/components/AnalysisPanel.tsx (暗色)
+- [ ] frontend/src/components/TradingPanel.tsx (暗色)
+- [ ] frontend/src/app/asset/[symbol]/page.tsx (暗色)
+- [ ] npm run build 成功

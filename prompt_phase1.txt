@@ -1,0 +1,345 @@
+你正在为 Gold & Crypto Tracker 项目开发后端基础层。我是这个系统的主要用户之一，验收会非常严格。
+
+**项目目录**: /home/dev/data/project/gold-crypto-tracker/
+**技术栈**: Python + FastAPI + SQLAlchemy 2.0 + SQLite(aiosqlite) + APScheduler + httpx + pandas + numpy
+**虚拟环境**: 使用 uv（不是conda！不是venv！不是poetry！）
+**端口**: 30305
+
+**极其重要：必须将结果用 Write 工具写入文件，不要只输出到 stdout！**
+
+## 任务要求
+
+### 1. 创建 uv 虚拟环境并安装依赖
+在 /home/dev/data/project/gold-crypto-tracker/ 目录下运行：
+```bash
+uv venv
+source .venv/bin/activate
+uv pip install fastapi uvicorn sqlalchemy aiosqlite httpx apscheduler pandas numpy pydantic pydantic-settings python-dotenv
+```
+
+### 2. 创建 requirements.txt
+```
+fastapi>=0.109.0
+uvicorn[standard]>=0.27.0
+sqlalchemy>=2.0.25
+aiosqlite>=0.19.0
+httpx>=0.26.0
+apscheduler>=3.10.4
+pandas>=2.1.4
+numpy>=1.26.3
+pydantic>=2.5.3
+pydantic-settings>=2.1.0
+python-dotenv>=1.0.0
+```
+
+### 3. 创建后端文件（所有文件必须写入 /home/dev/data/project/gold-crypto-tracker/backend/）
+
+**backend/__init__.py** - 空文件
+
+**backend/config.py** - 配置管理：
+```python
+from pydantic_settings import BaseSettings
+
+class Settings(BaseSettings):
+    PORT: int = 30305
+    DATABASE_URL: str = "sqlite+aiosqlite:///data/tracker.db"
+    PRICE_UPDATE_INTERVAL_MINUTES: int = 30
+    ANALYSIS_INTERVAL_HOURS: int = 6
+    
+    # API URLs
+    GOLD_API_URL: str = "https://gold-api.com/api/v1/stats"
+    BINANCE_API_URL: str = "https://api.binance.com"
+    COINGECKO_API_URL: str = "https://api.coingecko.com/api/v3"
+    
+    # Assets
+    ASSETS: dict = {
+        "gold": [{"symbol": "XAU", "name": "Gold", "source_priority": ["gold-api", "yfinance", "freegoldapi"]}],
+        "crypto": [
+            {"symbol": "BTCUSDT", "name": "Bitcoin", "coingecko_id": "bitcoin"},
+            {"symbol": "ETHUSDT", "name": "Ethereum", "coingecko_id": "ethereum"},
+            {"symbol": "ADAUSDT", "name": "Cardano", "coingecko_id": "cardano"},
+            {"symbol": "SOLUSDT", "name": "Solana", "coingecko_id": "solana"},
+            {"symbol": "XRPUSDT", "name": "Ripple", "coingecko_id": "ripple"},
+            {"symbol": "DOGEUSDT", "name": "Dogecoin", "coingecko_id": "dogecoin"},
+            {"symbol": "DOTUSDT", "name": "Polkadot", "coingecko_id": "polkadot"},
+            {"symbol": "MATICUSDT", "name": "Polygon", "coingecko_id": "matic-network"},
+            {"symbol": "LTCUSDT", "name": "Litecoin", "coingecko_id": "litecoin"},
+            {"symbol": "BCHUSDT", "name": "Bitcoin Cash", "coingecko_id": "bitcoin-cash"},
+        ]
+    }
+    
+    # Trading config
+    MAKER_FEE: float = 0.0008  # 0.08%
+    TAKER_FEE: float = 0.0010  # 0.10%
+    SPREAD: dict = {
+        "XAU": 0.0003,
+        "BTCUSDT": 0.0005,
+        "ETHUSDT": 0.0005,
+        "default": 0.0008
+    }
+    MIN_ORDER_USD: float = 10.0
+    INITIAL_BALANCE: float = 10000.0
+
+settings = Settings()
+```
+
+**backend/database.py** - SQLAlchemy异步数据库：
+```python
+from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
+from sqlalchemy.orm import declarative_base
+from backend.config import settings
+
+Base = declarative_base()
+
+engine = create_async_engine(settings.DATABASE_URL, echo=False)
+AsyncSessionLocal = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+
+async def get_db():
+    async with AsyncSessionLocal() as session:
+        yield session
+
+async def init_db():
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+```
+
+**backend/models/__init__.py** - 导出所有模型
+
+**backend/models/price.py** - 价格历史表：
+```python
+from sqlalchemy import Column, Integer, String, Float, DateTime, Index
+from sqlalchemy.sql import func
+from backend.database import Base
+
+class Price(Base):
+    __tablename__ = "prices"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    asset_type = Column(String, nullable=False)  # 'gold' or 'crypto'
+    symbol = Column(String, nullable=False, index=True)
+    name = Column(String)
+    price = Column(Float, nullable=False)
+    price_change_24h = Column(Float)
+    high_24h = Column(Float)
+    low_24h = Column(Float)
+    volume_24h = Column(Float)
+    timestamp = Column(DateTime(timezone=True), server_default=func.now(), index=True)
+    source = Column(String)
+    
+    __table_args__ = (
+        Index('idx_prices_symbol_time', 'symbol', 'timestamp'),
+    )
+```
+
+**backend/models/analysis.py** - 技术分析信号表：
+```python
+from sqlalchemy import Column, Integer, String, Float, DateTime, Text, CheckConstraint
+from sqlalchemy.sql import func
+from backend.database import Base
+
+class AnalysisSignal(Base):
+    __tablename__ = "analysis_signals"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    symbol = Column(String, nullable=False, index=True)
+    analysis_time = Column(DateTime(timezone=True), server_default=func.now())
+    rsi = Column(Float)
+    macd = Column(Float)
+    macd_signal = Column(Float)
+    bb_upper = Column(Float)
+    bb_lower = Column(Float)
+    bb_middle = Column(Float)
+    ema_12 = Column(Float)
+    ema_26 = Column(Float)
+    sma_50 = Column(Float)
+    trend_direction = Column(String, CheckConstraint("trend_direction IN ('bullish', 'bearish', 'neutral')"))
+    signal_strength = Column(Integer, CheckConstraint("signal_strength BETWEEN 1 AND 10"))
+    key_levels = Column(Text)  # JSON string
+    notes = Column(Text)
+```
+
+**backend/models/prediction.py** - 预测结果表：
+```python
+from sqlalchemy import Column, Integer, String, Float, DateTime, Text, CheckConstraint
+from sqlalchemy.sql import func
+from backend.database import Base
+
+class Prediction(Base):
+    __tablename__ = "predictions"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    symbol = Column(String, nullable=False, index=True)
+    generated_at = Column(DateTime(timezone=True), server_default=func.now())
+    timeframe = Column(String, CheckConstraint("timeframe IN ('24h', '7d', '30d')"))
+    prediction_direction = Column(String, CheckConstraint("prediction_direction IN ('up', 'down', 'neutral')"))
+    confidence_percent = Column(Integer, CheckConstraint("confidence_percent BETWEEN 0 AND 100"))
+    predicted_change_percent = Column(Float)
+    reasoning = Column(Text)
+    indicators_used = Column(Text)  # JSON string
+    historical_accuracy = Column(Float)
+    
+    __table_args__ = (
+        Index('idx_predictions_symbol_timeframe', 'symbol', 'timeframe', 'generated_at'),
+    )
+```
+
+**backend/models/user.py** - 用户表：
+```python
+from sqlalchemy import Column, Integer, String, Float, DateTime
+from sqlalchemy.sql import func
+from backend.database import Base
+
+class User(Base):
+    __tablename__ = "users"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, unique=True, nullable=False)
+    initial_balance = Column(Float, default=10000.0)
+    current_balance = Column(Float, default=10000.0)
+    total_deposited = Column(Float, default=0.0)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+```
+
+**backend/models/portfolio.py** - 持仓表：
+```python
+from sqlalchemy import Column, Integer, String, Float, DateTime, ForeignKey
+from sqlalchemy.sql import func
+from backend.database import Base
+
+class Portfolio(Base):
+    __tablename__ = "portfolios"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    symbol = Column(String, nullable=False)
+    asset_name = Column(String)
+    quantity = Column(Float, default=0.0)
+    avg_buy_price = Column(Float, default=0.0)
+    total_invested = Column(Float, default=0.0)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+```
+
+**backend/models/transaction.py** - 交易记录表：
+```python
+from sqlalchemy import Column, Integer, String, Float, DateTime, ForeignKey, CheckConstraint
+from sqlalchemy.sql import func
+from backend.database import Base
+
+class Transaction(Base):
+    __tablename__ = "transactions"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    symbol = Column(String, nullable=False)
+    transaction_type = Column(String, CheckConstraint("transaction_type IN ('buy', 'sell')"))
+    quantity = Column(Float, nullable=False)
+    price = Column(Float, nullable=False)
+    total_amount = Column(Float, nullable=False)
+    fee_amount = Column(Float, default=0.0)
+    spread_cost = Column(Float, default=0.0)
+    net_amount = Column(Float, nullable=False)
+    profit_loss = Column(Float, default=0.0)
+    timestamp = Column(DateTime(timezone=True), server_default=func.now())
+```
+
+**backend/utils/__init__.py** - 空文件
+
+**backend/utils/indicators.py** - 技术指标计算（纯pandas+numpy，无ML）：
+```python
+import pandas as pd
+import numpy as np
+
+def calculate_rsi(prices: pd.Series, period: int = 14) -> float:
+    """相对强弱指标 RSI"""
+    delta = prices.diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
+    rs = gain / loss
+    rsi = 100 - (100 / (1 + rs))
+    return rsi.iloc[-1]
+
+def calculate_macd(prices: pd.Series, fast: int = 12, slow: int = 26, signal: int = 9):
+    """MACD 指标，返回 (macd_line, signal_line, histogram)"""
+    ema_fast = prices.ewm(span=fast, adjust=False).mean()
+    ema_slow = prices.ewm(span=slow, adjust=False).mean()
+    macd_line = ema_fast - ema_slow
+    signal_line = macd_line.ewm(span=signal, adjust=False).mean()
+    histogram = macd_line - signal_line
+    return macd_line.iloc[-1], signal_line.iloc[-1], histogram.iloc[-1]
+
+def calculate_bollinger_bands(prices: pd.Series, period: int = 20, std_dev: int = 2):
+    """布林带，返回 (upper, middle, lower)"""
+    sma = prices.rolling(window=period).mean()
+    std = prices.rolling(window=period).std()
+    upper = sma + (std * std_dev)
+    lower = sma - (std * std_dev)
+    return upper.iloc[-1], sma.iloc[-1], lower.iloc[-1]
+
+def calculate_ema(prices: pd.Series, span: int) -> float:
+    """指数移动平均线"""
+    return prices.ewm(span=span, adjust=False).mean().iloc[-1]
+
+def calculate_sma(prices: pd.Series, window: int) -> float:
+    """简单移动平均线"""
+    return prices.rolling(window=window).mean().iloc[-1]
+
+def calculate_atr(high: pd.Series, low: pd.Series, close: pd.Series, period: int = 14) -> float:
+    """平均真实波幅 ATR"""
+    tr1 = high - low
+    tr2 = abs(high - close.shift())
+    tr3 = abs(low - close.shift())
+    tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+    return tr.rolling(window=period).mean().iloc[-1]
+```
+
+**backend/utils/http_client.py** - 异步HTTP客户端：
+```python
+import httpx
+
+class AsyncHttpClient:
+    def __init__(self, timeout: float = 30.0):
+        self.client = httpx.AsyncClient(timeout=timeout)
+    
+    async def get(self, url: str, **kwargs):
+        response = await self.client.get(url, **kwargs)
+        response.raise_for_status()
+        return response
+    
+    async def post(self, url: str, **kwargs):
+        response = await self.client.post(url, **kwargs)
+        response.raise_for_status()
+        return response
+    
+    async def close(self):
+        await self.client.aclose()
+
+http_client = AsyncHttpClient()
+```
+
+### 4. 验证
+创建完成后，运行：
+```bash
+cd /home/dev/data/project/gold-crypto-tracker
+source .venv/bin/activate
+python -c "from backend.database import init_db; import asyncio; asyncio.run(init_db())"
+```
+确认数据库能正常初始化，且 data/tracker.db 文件被创建。
+
+### 5. 文件清单确认
+完成后报告以下文件是否全部创建：
+- [ ] requirements.txt
+- [ ] backend/__init__.py
+- [ ] backend/config.py
+- [ ] backend/database.py
+- [ ] backend/models/__init__.py
+- [ ] backend/models/price.py
+- [ ] backend/models/analysis.py
+- [ ] backend/models/prediction.py
+- [ ] backend/models/user.py
+- [ ] backend/models/portfolio.py
+- [ ] backend/models/transaction.py
+- [ ] backend/utils/__init__.py
+- [ ] backend/utils/indicators.py
+- [ ] backend/utils/http_client.py
+- [ ] data/tracker.db (验证时生成)

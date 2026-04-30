@@ -1,0 +1,17 @@
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Node
+node_modules/
+npm-debug.log*
+
+# Data & logs
+data/tracker.db
+*.log
+*.pid
+
+# OS
+.DS_Store

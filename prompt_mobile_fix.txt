@@ -1,0 +1,41 @@
+修复 Gold & Crypto Tracker 的手机端响应式布局。
+
+**项目目录**: /home/dev/data/project/gold-crypto-tracker/frontend/
+**技术栈**: Next.js 14 + Tailwind CSS
+
+## 当前问题（从 iPhone 截图发现）
+
+1. **导航 pills 被截断** — "Predictions" 按钮显示不全
+2. **Portfolio 区域缺失** — 余额/总资产/盈亏信息没有显示
+3. **资产卡片不显示** — Gold 和 Cryptocurrency 区域只有标题没有内容
+4. **布局没有响应式** — 还是桌面网格布局，没有针对 393px 宽度优化
+
+## 需要修复的文件
+
+### 1. `src/app/page.tsx` — Dashboard 首页
+- 导航栏：在移动端改为垂直堆叠或汉堡菜单
+- Portfolio 摘要：用适合手机的卡片布局显示
+- Gold/Crypto 区域：资产卡片在移动端单列显示，卡片内容适配窄屏
+- 整体 padding 在移动端减小（p-6 → p-3）
+- 字体大小适配移动端
+
+### 2. `src/app/trade/page.tsx` — 交易页面
+- 交易表单和 Portfolio 视图在移动端上下堆叠（不是左右并排）
+- 输入框和按钮大小适合触摸
+
+### 3. `src/app/leaderboard/page.tsx` — 排行榜
+- 表格在移动端改为卡片列表（表格在手机上太难用）
+
+### 4. `src/app/predictions/page.tsx` — 预测页面
+- 预测卡片在移动端单列显示
+
+### 5. `src/app/asset/[symbol]/page.tsx` — 资产详情
+- 图表和交易面板在移动端上下堆叠
+
+## 验收标准
+- 在 393x852 视口（iPhone 14 Pro）下所有内容可见，不需要横向滚动
+- 所有按钮大小至少 44x44px（Apple 触摸标准）
+- 文字清晰可读，不需要缩放
+- Portfolio 摘要、资产价格、交易功能在移动端都能正常使用
+
+修复完成后，构建前端并确保没有编译错误。

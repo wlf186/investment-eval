@@ -1,0 +1,902 @@
+你正在为 Gold & Crypto Tracker 项目开发后端业务层。我是这个系统的主要用户之一，验收会非常严格。
+
+**项目目录**: /home/dev/data/project/gold-crypto-tracker/
+**已有基础**: uv虚拟环境已创建，数据库模型已定义，依赖已安装
+**技术栈**: Python + FastAPI + SQLAlchemy 2.0 + APScheduler + httpx
+**端口**: 30305
+
+**极其重要：必须将结果用 Write 工具写入文件，不要只输出到 stdout！**
+
+## 任务要求
+
+### 1. 创建价格采集服务 backend/services/price_service.py
+
+功能：从免费API获取黄金和加密货币价格
+
+```python
+import asyncio
+from datetime import datetime, timedelta
+from typing import Optional
+import httpx
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select, desc
+from backend.database import AsyncSessionLocal
+from backend.models.price import Price
+from backend.config import settings
+
+class PriceService:
+    def __init__(self):
+        self.client = httpx.AsyncClient(timeout=30.0)
+    
+    async def fetch_gold_price(self) -> Optional[dict]:
+        """获取黄金价格 - 优先 gold-api.com，失败则用备用源"""
+        try:
+            # 尝试 gold-api.com
+            resp = await self.client.get(
+                "https://gold-api.com/api/v1/stats",
+                headers={"Accept": "application/json"}
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                return {
+                    "symbol": "XAU",
+                    "name": "Gold",
+                    "price": float(data.get("price", 0)),
+                    "price_change_24h": float(data.get("change", 0)),
+                    "high_24h": float(data.get("high", 0)),
+                    "low_24h": float(data.get("low", 0)),
+                    "source": "gold-api"
+                }
+        except Exception:
+            pass
+        
+        # 备用：使用 Binance XAUUSDT 交易对
+        try:
+            resp = await self.client.get(
+                "https://api.binance.com/api/v3/ticker/24hr?symbol=XAUUSDT"
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                return {
+                    "symbol": "XAU",
+                    "name": "Gold",
+                    "price": float(data["lastPrice"]),
+                    "price_change_24h": float(data["priceChangePercent"]),
+                    "high_24h": float(data["highPrice"]),
+                    "low_24h": float(data["lowPrice"]),
+                    "volume_24h": float(data["volume"]),
+                    "source": "binance"
+                }
+        except Exception:
+            pass
+        
+        return None
+    
+    async def fetch_crypto_prices(self) -> list[dict]:
+        """获取加密货币价格 - 使用 Binance API"""
+        results = []
+        symbols = [a["symbol"] for a in settings.ASSETS["crypto"]]
+        
+        try:
+            # Binance 批量查询
+            symbols_str = json.dumps(symbols)
+            resp = await self.client.get(
+                "https://api.binance.com/api/v3/ticker/24hr",
+                params={"symbols": symbols_str}
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                for item in data:
+                    symbol = item["symbol"]
+                    asset_info = next((a for a in settings.ASSETS["crypto"] if a["symbol"] == symbol), None)
+                    if asset_info:
+                        results.append({
+                            "symbol": symbol,
+                            "name": asset_info["name"],
+                            "price": float(item["lastPrice"]),
+                            "price_change_24h": float(item["priceChangePercent"]),
+                            "high_24h": float(item["highPrice"]),
+                            "low_24h": float(item["lowPrice"]),
+                            "volume_24h": float(item["volume"]),
+                            "source": "binance"
+                        })
+        except Exception as e:
+            print(f"Error fetching crypto prices: {e}")
+        
+        return results
+    
+    async def update_all_prices(self):
+        """更新所有资产价格到数据库"""
+        async with AsyncSessionLocal() as session:
+            # 获取黄金价格
+            gold_data = await self.fetch_gold_price()
+            if gold_data:
+                gold_price = Price(
+                    asset_type="gold",
+                    symbol=gold_data["symbol"],
+                    name=gold_data["name"],
+                    price=gold_data["price"],
+                    price_change_24h=gold_data.get("price_change_24h"),
+                    high_24h=gold_data.get("high_24h"),
+                    low_24h=gold_data.get("low_24h"),
+                    volume_24h=gold_data.get("volume_24h"),
+                    source=gold_data["source"]
+                )
+                session.add(gold_price)
+            
+            # 获取加密货币价格
+            crypto_data = await self.fetch_crypto_prices()
+            for data in crypto_data:
+                crypto_price = Price(
+                    asset_type="crypto",
+                    symbol=data["symbol"],
+                    name=data["name"],
+                    price=data["price"],
+                    price_change_24h=data.get("price_change_24h"),
+                    high_24h=data.get("high_24h"),
+                    low_24h=data.get("low_24h"),
+                    volume_24h=data.get("volume_24h"),
+                    source=data["source"]
+                )
+                session.add(crypto_price)
+            
+            await session.commit()
+    
+    async def get_latest_prices(self, session: AsyncSession) -> list[Price]:
+        """获取每种资产的最新价格"""
+        # 子查询获取每个 symbol 的最新记录
+        subq = select(
+            Price.symbol,
+            func.max(Price.timestamp).label("max_time")
+        ).group_by(Price.symbol).subquery()
+        
+        query = select(Price).join(
+            subq,
+            (Price.symbol == subq.c.symbol) & (Price.timestamp == subq.c.max_time)
+        )
+        result = await session.execute(query)
+        return result.scalars().all()
+    
+    async def get_price_history(self, session: AsyncSession, symbol: str, hours: int = 24) -> list[Price]:
+        """获取指定资产的价格历史"""
+        cutoff = datetime.utcnow() - timedelta(hours=hours)
+        query = select(Price).where(
+            Price.symbol == symbol,
+            Price.timestamp >= cutoff
+        ).order_by(Price.timestamp)
+        result = await session.execute(query)
+        return result.scalars().all()
+    
+    async def close(self):
+        await self.client.aclose()
+
+price_service = PriceService()
+```
+
+**注意：需要 import json 在文件顶部**
+
+### 2. 创建分析预测服务 backend/services/analysis_service.py
+
+功能：基于技术指标生成分析信号和预测
+
+```python
+import json
+from datetime import datetime
+from typing import Optional
+import pandas as pd
+import numpy as np
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select, desc
+from backend.database import AsyncSessionLocal
+from backend.models.price import Price
+from backend.models.analysis import AnalysisSignal
+from backend.models.prediction import Prediction
+from backend.utils.indicators import (
+    calculate_rsi, calculate_macd, calculate_bollinger_bands,
+    calculate_ema, calculate_sma
+)
+
+class AnalysisService:
+    async def analyze_asset(self, session: AsyncSession, symbol: str) -> Optional[AnalysisSignal]:
+        """对单个资产进行技术分析"""
+        # 获取最近90天的价格数据（用于计算指标）
+        cutoff = datetime.utcnow() - timedelta(days=90)
+        query = select(Price).where(
+            Price.symbol == symbol,
+            Price.timestamp >= cutoff
+        ).order_by(Price.timestamp)
+        result = await session.execute(query)
+        prices = result.scalars().all()
+        
+        if len(prices) < 30:  # 需要至少30个数据点
+            return None
+        
+        # 构建 pandas Series
+        price_series = pd.Series([p.price for p in prices])
+        
+        # 计算指标
+        rsi = calculate_rsi(price_series)
+        macd, macd_signal, _ = calculate_macd(price_series)
+        bb_upper, bb_middle, bb_lower = calculate_bollinger_bands(price_series)
+        ema_12 = calculate_ema(price_series, 12)
+        ema_26 = calculate_ema(price_series, 26)
+        sma_50 = calculate_sma(price_series, 50)
+        
+        # 判断趋势方向
+        current_price = prices[-1].price
+        trend = "neutral"
+        if ema_12 > ema_26 and current_price > sma_50:
+            trend = "bullish"
+        elif ema_12 < ema_26 and current_price < sma_50:
+            trend = "bearish"
+        
+        # 信号强度 (1-10)
+        strength = 5
+        if rsi < 30:  # 超卖，看涨信号
+            strength = min(10, strength + 3)
+        elif rsi > 70:  # 超买，看跌信号
+            strength = min(10, strength + 3)
+        
+        if macd > macd_signal and trend == "bullish":
+            strength = min(10, strength + 2)
+        elif macd < macd_signal and trend == "bearish":
+            strength = min(10, strength + 2)
+        
+        # 关键价位
+        key_levels = {
+            "support": round(float(bb_lower), 2),
+            "resistance": round(float(bb_upper), 2),
+            "sma50": round(float(sma_50), 2),
+            "current": round(current_price, 2)
+        }
+        
+        signal = AnalysisSignal(
+            symbol=symbol,
+            rsi=round(float(rsi), 2),
+            macd=round(float(macd), 4),
+            macd_signal=round(float(macd_signal), 4),
+            bb_upper=round(float(bb_upper), 2),
+            bb_lower=round(float(bb_lower), 2),
+            bb_middle=round(float(bb_middle), 2),
+            ema_12=round(float(ema_12), 2),
+            ema_26=round(float(ema_26), 2),
+            sma_50=round(float(sma_50), 2),
+            trend_direction=trend,
+            signal_strength=strength,
+            key_levels=json.dumps(key_levels),
+            notes=f"EMA12 {'>' if ema_12 > ema_26 else '<'} EMA26, Price {'>' if current_price > sma_50 else '<'} SMA50"
+        )
+        
+        session.add(signal)
+        await session.commit()
+        return signal
+    
+    async def generate_prediction(self, session: AsyncSession, symbol: str, timeframe: str = "24h") -> Optional[Prediction]:
+        """基于技术分析生成预测（非ML，纯规则）"""
+        # 获取最新分析信号
+        query = select(AnalysisSignal).where(
+            AnalysisSignal.symbol == symbol
+        ).order_by(desc(AnalysisSignal.analysis_time)).limit(1)
+        result = await session.execute(query)
+        signal = result.scalar_one_or_none()
+        
+        if not signal:
+            return None
+        
+        # 基于信号生成预测
+        direction = "neutral"
+        confidence = 50
+        predicted_change = 0.0
+        
+        if signal.trend_direction == "bullish":
+            if signal.rsi < 40:  # 超卖反弹
+                direction = "up"
+                confidence = 65 + signal.signal_strength * 2
+                predicted_change = 1.5 + signal.signal_strength * 0.3
+            elif signal.rsi < 60:  # 健康上涨
+                direction = "up"
+                confidence = 55 + signal.signal_strength
+                predicted_change = 0.8 + signal.signal_strength * 0.2
+            else:  # 超买但趋势强
+                direction = "neutral"
+                confidence = 50
+                predicted_change = 0.2
+        elif signal.trend_direction == "bearish":
+            if signal.rsi > 60:  # 超买回调
+                direction = "down"
+                confidence = 65 + signal.signal_strength * 2
+                predicted_change = -(1.5 + signal.signal_strength * 0.3)
+            elif signal.rsi > 40:  # 健康下跌
+                direction = "down"
+                confidence = 55 + signal.signal_strength
+                predicted_change = -(0.8 + signal.signal_strength * 0.2)
+            else:  # 超卖但趋势弱
+                direction = "neutral"
+                confidence = 50
+                predicted_change = -0.2
+        
+        # 根据时间框架调整
+        multiplier = {"24h": 1.0, "7d": 2.5, "30d": 5.0}.get(timeframe, 1.0)
+        predicted_change *= multiplier
+        
+        # 模拟历史准确率（基于信号强度）
+        historical_accuracy = min(85, 50 + signal.signal_strength * 3)
+        
+        prediction = Prediction(
+            symbol=symbol,
+            timeframe=timeframe,
+            prediction_direction=direction,
+            confidence_percent=min(100, max(0, int(confidence))),
+            predicted_change_percent=round(predicted_change, 2),
+            reasoning=f"Based on {signal.trend_direction} trend, RSI={signal.rsi:.1f}, MACD signal, Bollinger Bands position",
+            indicators_used=json.dumps({
+                "rsi": signal.rsi,
+                "macd": signal.macd,
+                "macd_signal": signal.macd_signal,
+                "trend": signal.trend_direction,
+                "strength": signal.signal_strength
+            }),
+            historical_accuracy=round(historical_accuracy, 1)
+        )
+        
+        session.add(prediction)
+        await session.commit()
+        return prediction
+    
+    async def analyze_all_assets(self):
+        """分析所有资产"""
+        async with AsyncSessionLocal() as session:
+            from backend.config import settings
+            all_symbols = ["XAU"] + [a["symbol"] for a in settings.ASSETS["crypto"]]
+            
+            for symbol in all_symbols:
+                try:
+                    await self.analyze_asset(session, symbol)
+                    # 生成各时间框架预测
+                    for tf in ["24h", "7d", "30d"]:
+                        await self.generate_prediction(session, symbol, tf)
+                except Exception as e:
+                    print(f"Error analyzing {symbol}: {e}")
+
+analysis_service = AnalysisService()
+```
+
+### 3. 创建交易引擎服务 backend/services/trading_service.py
+
+功能：模拟交易（买入/卖出），含手续费和点差
+
+```python
+from datetime import datetime
+from typing import Optional
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select, desc
+from backend.models.user import User
+from backend.models.portfolio import Portfolio
+from backend.models.transaction import Transaction
+from backend.models.price import Price
+from backend.config import settings
+
+class TradingService:
+    async def get_or_create_user(self, session: AsyncSession, name: str = "default") -> User:
+        """获取或创建默认用户"""
+        query = select(User).where(User.name == name)
+        result = await session.execute(query)
+        user = result.scalar_one_or_none()
+        
+        if not user:
+            user = User(name=name, initial_balance=settings.INITIAL_BALANCE, current_balance=settings.INITIAL_BALANCE)
+            session.add(user)
+            await session.commit()
+            await session.refresh(user)
+        
+        return user
+    
+    async def get_current_price(self, session: AsyncSession, symbol: str) -> Optional[float]:
+        """获取资产当前价格"""
+        query = select(Price).where(Price.symbol == symbol).order_by(desc(Price.timestamp)).limit(1)
+        result = await session.execute(query)
+        price = result.scalar_one_or_none()
+        return price.price if price else None
+    
+    async def buy(self, session: AsyncSession, user_id: int, symbol: str, quantity: float) -> dict:
+        """买入资产"""
+        # 获取用户
+        query = select(User).where(User.id == user_id)
+        result = await session.execute(query)
+        user = result.scalar_one_or_none()
+        
+        if not user:
+            return {"success": False, "error": "User not found"}
+        
+        # 获取当前价格
+        price = await self.get_current_price(session, symbol)
+        if not price:
+            return {"success": False, "error": "Price not available"}
+        
+        # 计算成本（含点差和手续费）
+        spread = settings.SPREAD.get(symbol, settings.SPREAD["default"])
+        adjusted_price = price * (1 + spread)  # 买入价 = 市场价 + 点差
+        total_amount = adjusted_price * quantity
+        fee = total_amount * settings.TAKER_FEE
+        net_amount = total_amount + fee
+        
+        # 检查余额
+        if net_amount > user.current_balance:
+            return {"success": False, "error": "Insufficient balance"}
+        
+        # 检查最小订单
+        if total_amount < settings.MIN_ORDER_USD:
+            return {"success": False, "error": f"Minimum order is ${settings.MIN_ORDER_USD}"}
+        
+        # 更新用户余额
+        user.current_balance -= net_amount
+        
+        # 更新或创建持仓
+        query = select(Portfolio).where(Portfolio.user_id == user_id, Portfolio.symbol == symbol)
+        result = await session.execute(query)
+        portfolio = result.scalar_one_or_none()
+        
+        if portfolio:
+            # 更新现有持仓（加权平均成本）
+            total_qty = portfolio.quantity + quantity
+            total_cost = portfolio.quantity * portfolio.avg_buy_price + quantity * adjusted_price
+            portfolio.quantity = total_qty
+            portfolio.avg_buy_price = total_cost / total_qty
+            portfolio.total_invested += net_amount
+        else:
+            portfolio = Portfolio(
+                user_id=user_id,
+                symbol=symbol,
+                asset_name=symbol,
+                quantity=quantity,
+                avg_buy_price=adjusted_price,
+                total_invested=net_amount
+            )
+            session.add(portfolio)
+        
+        # 记录交易
+        transaction = Transaction(
+            user_id=user_id,
+            symbol=symbol,
+            transaction_type="buy",
+            quantity=quantity,
+            price=adjusted_price,
+            total_amount=total_amount,
+            fee_amount=fee,
+            spread_cost=total_amount * spread,
+            net_amount=net_amount
+        )
+        session.add(transaction)
+        
+        await session.commit()
+        
+        return {
+            "success": True,
+            "transaction_id": transaction.id,
+            "symbol": symbol,
+            "quantity": quantity,
+            "price": adjusted_price,
+            "total": total_amount,
+            "fee": fee,
+            "net_cost": net_amount,
+            "remaining_balance": user.current_balance
+        }
+    
+    async def sell(self, session: AsyncSession, user_id: int, symbol: str, quantity: float) -> dict:
+        """卖出资产"""
+        # 获取用户和持仓
+        query = select(User).where(User.id == user_id)
+        result = await session.execute(query)
+        user = result.scalar_one_or_none()
+        
+        if not user:
+            return {"success": False, "error": "User not found"}
+        
+        query = select(Portfolio).where(Portfolio.user_id == user_id, Portfolio.symbol == symbol)
+        result = await session.execute(query)
+        portfolio = result.scalar_one_or_none()
+        
+        if not portfolio or portfolio.quantity < quantity:
+            return {"success": False, "error": "Insufficient holdings"}
+        
+        # 获取当前价格
+        price = await self.get_current_price(session, symbol)
+        if not price:
+            return {"success": False, "error": "Price not available"}
+        
+        # 计算收入（含点差和手续费）
+        spread = settings.SPREAD.get(symbol, settings.SPREAD["default"])
+        adjusted_price = price * (1 - spread)  # 卖出价 = 市场价 - 点差
+        total_amount = adjusted_price * quantity
+        fee = total_amount * settings.TAKER_FEE
+        net_amount = total_amount - fee
+        
+        # 计算盈亏
+        cost_basis = quantity * portfolio.avg_buy_price
+        profit_loss = net_amount - cost_basis
+        
+        # 更新用户余额
+        user.current_balance += net_amount
+        
+        # 更新持仓
+        portfolio.quantity -= quantity
+        if portfolio.quantity == 0:
+            portfolio.avg_buy_price = 0
+            portfolio.total_invested = 0
+        else:
+            portfolio.total_invested = portfolio.quantity * portfolio.avg_buy_price
+        
+        # 记录交易
+        transaction = Transaction(
+            user_id=user_id,
+            symbol=symbol,
+            transaction_type="sell",
+            quantity=quantity,
+            price=adjusted_price,
+            total_amount=total_amount,
+            fee_amount=fee,
+            spread_cost=total_amount * spread,
+            net_amount=net_amount,
+            profit_loss=profit_loss
+        )
+        session.add(transaction)
+        
+        await session.commit()
+        
+        return {
+            "success": True,
+            "transaction_id": transaction.id,
+            "symbol": symbol,
+            "quantity": quantity,
+            "price": adjusted_price,
+            "total": total_amount,
+            "fee": fee,
+            "net_revenue": net_amount,
+            "profit_loss": profit_loss,
+            "remaining_balance": user.current_balance
+        }
+    
+    async def get_portfolio(self, session: AsyncSession, user_id: int) -> dict:
+        """获取用户投资组合"""
+        query = select(User).where(User.id == user_id)
+        result = await session.execute(query)
+        user = result.scalar_one_or_none()
+        
+        if not user:
+            return {"error": "User not found"}
+        
+        query = select(Portfolio).where(Portfolio.user_id == user_id)
+        result = await session.execute(query)
+        holdings = result.scalars().all()
+        
+        # 计算持仓市值
+        total_value = user.current_balance
+        holdings_detail = []
+        
+        for h in holdings:
+            if h.quantity > 0:
+                current_price = await self.get_current_price(session, h.symbol)
+                market_value = h.quantity * current_price if current_price else 0
+                total_value += market_value
+                
+                pnl = market_value - h.total_invested if current_price else 0
+                pnl_percent = (pnl / h.total_invested * 100) if h.total_invested > 0 else 0
+                
+                holdings_detail.append({
+                    "symbol": h.symbol,
+                    "asset_name": h.asset_name,
+                    "quantity": h.quantity,
+                    "avg_buy_price": h.avg_buy_price,
+                    "current_price": current_price,
+                    "market_value": market_value,
+                    "total_invested": h.total_invested,
+                    "pnl": pnl,
+                    "pnl_percent": pnl_percent
+                })
+        
+        total_invested = user.initial_balance + user.total_deposited
+        total_pnl = total_value - total_invested
+        total_pnl_percent = (total_pnl / total_invested * 100) if total_invested > 0 else 0
+        
+        return {
+            "user_id": user_id,
+            "balance": user.current_balance,
+            "total_value": total_value,
+            "total_invested": total_invested,
+            "total_pnl": total_pnl,
+            "total_pnl_percent": total_pnl_percent,
+            "holdings": holdings_detail
+        }
+
+trading_service = TradingService()
+```
+
+### 4. 创建 API 路由
+
+**backend/routers/__init__.py** - 空文件
+
+**backend/routers/prices.py** - 价格相关API：
+```python
+from fastapi import APIRouter, Depends
+from sqlalchemy.ext.asyncio import AsyncSession
+from backend.database import get_db
+from backend.services.price_service import price_service
+
+router = APIRouter(prefix="/api/prices", tags=["prices"])
+
+@router.get("/latest")
+async def get_latest_prices(session: AsyncSession = Depends(get_db)):
+    """获取所有资产最新价格"""
+    prices = await price_service.get_latest_prices(session)
+    return {
+        "prices": [
+            {
+                "symbol": p.symbol,
+                "name": p.name,
+                "price": p.price,
+                "change_24h": p.price_change_24h,
+                "high_24h": p.high_24h,
+                "low_24h": p.low_24h,
+                "volume_24h": p.volume_24h,
+                "timestamp": p.timestamp.isoformat() if p.timestamp else None,
+                "asset_type": p.asset_type
+            }
+            for p in prices
+        ]
+    }
+
+@router.get("/history/{symbol}")
+async def get_price_history(symbol: str, hours: int = 24, session: AsyncSession = Depends(get_db)):
+    """获取指定资产价格历史"""
+    history = await price_service.get_price_history(session, symbol, hours)
+    return {
+        "symbol": symbol,
+        "data_points": len(history),
+        "history": [
+            {
+                "price": p.price,
+                "timestamp": p.timestamp.isoformat() if p.timestamp else None
+            }
+            for p in history
+        ]
+    }
+```
+
+**backend/routers/analysis.py** - 分析预测API：
+```python
+from fastapi import APIRouter, Depends
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select, desc
+from backend.database import get_db
+from backend.models.analysis import AnalysisSignal
+from backend.models.prediction import Prediction
+
+router = APIRouter(prefix="/api/analysis", tags=["analysis"])
+
+@router.get("/signals/{symbol}")
+async def get_analysis_signal(symbol: str, session: AsyncSession = Depends(get_db)):
+    """获取资产最新技术分析信号"""
+    query = select(AnalysisSignal).where(
+        AnalysisSignal.symbol == symbol
+    ).order_by(desc(AnalysisSignal.analysis_time)).limit(1)
+    result = await session.execute(query)
+    signal = result.scalar_one_or_none()
+    
+    if not signal:
+        return {"error": "No analysis data available"}
+    
+    import json
+    return {
+        "symbol": signal.symbol,
+        "analysis_time": signal.analysis_time.isoformat() if signal.analysis_time else None,
+        "rsi": signal.rsi,
+        "macd": signal.macd,
+        "macd_signal": signal.macd_signal,
+        "bollinger_bands": {
+            "upper": signal.bb_upper,
+            "middle": signal.bb_middle,
+            "lower": signal.bb_lower
+        },
+        "ema_12": signal.ema_12,
+        "ema_26": signal.ema_26,
+        "sma_50": signal.sma_50,
+        "trend_direction": signal.trend_direction,
+        "signal_strength": signal.signal_strength,
+        "key_levels": json.loads(signal.key_levels) if signal.key_levels else None,
+        "notes": signal.notes
+    }
+
+@router.get("/predictions/{symbol}")
+async def get_predictions(symbol: str, session: AsyncSession = Depends(get_db)):
+    """获取资产各时间框架预测"""
+    query = select(Prediction).where(
+        Prediction.symbol == symbol
+    ).order_by(desc(Prediction.generated_at))
+    result = await session.execute(query)
+    predictions = result.scalars().all()
+    
+    # 按时间框架分组，取最新
+    latest_by_tf = {}
+    for p in predictions:
+        if p.timeframe not in latest_by_tf:
+            latest_by_tf[p.timeframe] = p
+    
+    import json
+    return {
+        "symbol": symbol,
+        "predictions": [
+            {
+                "timeframe": p.timeframe,
+                "direction": p.prediction_direction,
+                "confidence": p.confidence_percent,
+                "predicted_change": p.predicted_change_percent,
+                "reasoning": p.reasoning,
+                "indicators_used": json.loads(p.indicators_used) if p.indicators_used else None,
+                "historical_accuracy": p.historical_accuracy,
+                "generated_at": p.generated_at.isoformat() if p.generated_at else None
+            }
+            for p in latest_by_tf.values()
+        ]
+    }
+```
+
+**backend/routers/trading.py** - 交易API：
+```python
+from fastapi import APIRouter, Depends
+from sqlalchemy.ext.asyncio import AsyncSession
+from backend.database import get_db
+from backend.services.trading_service import trading_service
+
+router = APIRouter(prefix="/api/trading", tags=["trading"])
+
+@router.post("/buy")
+async def buy_asset(symbol: str, quantity: float, session: AsyncSession = Depends(get_db)):
+    """买入资产"""
+    user = await trading_service.get_or_create_user(session)
+    result = await trading_service.buy(session, user.id, symbol, quantity)
+    return result
+
+@router.post("/sell")
+async def sell_asset(symbol: str, quantity: float, session: AsyncSession = Depends(get_db)):
+    """卖出资产"""
+    user = await trading_service.get_or_create_user(session)
+    result = await trading_service.sell(session, user.id, symbol, quantity)
+    return result
+
+@router.get("/portfolio")
+async def get_portfolio(session: AsyncSession = Depends(get_db)):
+    """获取投资组合"""
+    user = await trading_service.get_or_create_user(session)
+    result = await trading_service.get_portfolio(session, user.id)
+    return result
+
+@router.get("/transactions")
+async def get_transactions(limit: int = 50, session: AsyncSession = Depends(get_db)):
+    """获取交易历史"""
+    from sqlalchemy import select, desc
+    from backend.models.transaction import Transaction
+    
+    user = await trading_service.get_or_create_user(session)
+    query = select(Transaction).where(
+        Transaction.user_id == user.id
+    ).order_by(desc(Transaction.timestamp)).limit(limit)
+    result = await session.execute(query)
+    transactions = result.scalars().all()
+    
+    return {
+        "transactions": [
+            {
+                "id": t.id,
+                "symbol": t.symbol,
+                "type": t.transaction_type,
+                "quantity": t.quantity,
+                "price": t.price,
+                "total": t.total_amount,
+                "fee": t.fee_amount,
+                "profit_loss": t.profit_loss,
+                "timestamp": t.timestamp.isoformat() if t.timestamp else None
+            }
+            for t in transactions
+        ]
+    }
+```
+
+### 5. 创建主应用 backend/main.py
+
+```python
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from contextlib import asynccontextmanager
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.interval import IntervalTrigger
+
+from backend.database import init_db
+from backend.services.price_service import price_service
+from backend.services.analysis_service import analysis_service
+from backend.routers import prices, analysis, trading
+
+scheduler = AsyncIOScheduler()
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # 启动时初始化数据库
+    await init_db()
+    
+    # 启动时立即获取一次价格
+    await price_service.update_all_prices()
+    
+    # 设置定时任务
+    scheduler.add_job(
+        price_service.update_all_prices,
+        IntervalTrigger(minutes=30),
+        id="price_update",
+        replace_existing=True
+    )
+    scheduler.add_job(
+        analysis_service.analyze_all_assets,
+        IntervalTrigger(hours=6),
+        id="analysis",
+        replace_existing=True
+    )
+    scheduler.start()
+    
+    yield
+    
+    # 关闭时清理
+    scheduler.shutdown()
+    await price_service.close()
+
+app = FastAPI(
+    title="Gold & Crypto Tracker API",
+    description="Real-time gold and cryptocurrency tracking with technical analysis",
+    version="1.0.0",
+    lifespan=lifespan
+)
+
+# CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # 生产环境应限制为前端域名
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# 注册路由
+app.include_router(prices.router)
+app.include_router(analysis.router)
+app.include_router(trading.router)
+
+@app.get("/health")
+async def health_check():
+    return {"status": "ok", "service": "gold-crypto-tracker"}
+
+@app.get("/api/assets")
+async def get_assets():
+    from backend.config import settings
+    return {
+        "gold": settings.ASSETS["gold"],
+        "crypto": settings.ASSETS["crypto"]
+    }
+```
+
+### 6. 验证
+
+创建完成后，运行端到端验证：
+```bash
+cd /home/dev/data/project/gold-crypto-tracker
+source .venv/bin/activate
+python -c "from backend.main import app; print('✅ FastAPI app imports successfully')"
+```
+
+### 7. 文件清单确认
+完成后报告以下文件是否全部创建：
+- [ ] backend/services/__init__.py
+- [ ] backend/services/price_service.py
+- [ ] backend/services/analysis_service.py
+- [ ] backend/services/trading_service.py
+- [ ] backend/routers/__init__.py
+- [ ] backend/routers/prices.py
+- [ ] backend/routers/analysis.py
+- [ ] backend/routers/trading.py
+- [ ] backend/main.py

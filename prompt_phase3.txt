@@ -1,0 +1,697 @@
+你正在为 Gold & Crypto Tracker 项目开发前端。我是这个系统的主要用户之一，验收会非常严格。
+
+**项目目录**: /home/dev/data/project/gold-crypto-tracker/
+**技术栈**: Next.js 14 + TypeScript + Tailwind CSS + shadcn/ui + Recharts
+**后端API**: http://localhost:30305
+**端口**: 30306
+
+**极其重要：必须将结果用 Write 工具写入文件，不要只输出到 stdout！**
+
+## 任务要求
+
+### 1. 初始化 Next.js 项目
+在 /home/dev/data/project/gold-crypto-tracker/frontend/ 目录下：
+```bash
+cd /home/dev/data/project/gold-crypto-tracker
+# 使用 npx 创建 Next.js 项目（选择 TypeScript + Tailwind + App Router）
+echo "my-app" | npx create-next-app@14 frontend --typescript --tailwind --eslint --app --src-dir --no-import-alias
+```
+
+如果 create-next-app 交互式提示，选择：
+- TypeScript: Yes
+- ESLint: Yes
+- Tailwind CSS: Yes
+- src directory: Yes
+- App Router: Yes
+- import alias: No (使用默认)
+
+### 2. 安装额外依赖
+```bash
+cd /home/dev/data/project/gold-crypto-tracker/frontend
+npm install recharts lucide-react
+npm install -D @types/node
+```
+
+### 3. 配置 API 基础URL
+
+**frontend/src/lib/api.ts**:
+```typescript
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:30305";
+
+export async function fetchAPI(path: string, options?: RequestInit) {
+  const url = `${API_BASE}${path}`;
+  const response = await fetch(url, {
+    headers: { "Content-Type": "application/json" },
+    ...options,
+  });
+  if (!response.ok) {
+    throw new Error(`API error: ${response.status}`);
+  }
+  return response.json();
+}
+```
+
+### 4. 创建页面组件
+
+**frontend/src/app/page.tsx** - 主仪表板：
+```tsx
+"use client";
+
+import { useEffect, useState } from "react";
+import { fetchAPI } from "@/lib/api";
+import PriceCard from "@/components/PriceCard";
+import PortfolioSummary from "@/components/PortfolioSummary";
+import { TrendingUp, TrendingDown, Activity } from "lucide-react";
+
+interface AssetPrice {
+  symbol: string;
+  name: string;
+  price: number;
+  change_24h: number;
+  asset_type: string;
+}
+
+export default function Dashboard() {
+  const [prices, setPrices] = useState<AssetPrice[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    async function loadPrices() {
+      try {
+        const data = await fetchAPI("/api/prices/latest");
+        setPrices(data.prices || []);
+      } catch (e) {
+        console.error("Failed to load prices:", e);
+      } finally {
+        setLoading(false);
+      }
+    }
+    loadPrices();
+    const interval = setInterval(loadPrices, 30000); // 每30秒刷新
+    return () => clearInterval(interval);
+  }, []);
+
+  const goldPrices = prices.filter((p) => p.asset_type === "gold");
+  const cryptoPrices = prices.filter((p) => p.asset_type === "crypto");
+
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500"></div>
+      </div>
+    );
+  }
+
+  return (
+    <main className="min-h-screen bg-gray-50 p-6">
+      <div className="max-w-7xl mx-auto">
+        <header className="mb-8">
+          <h1 className="text-3xl font-bold text-gray-900 flex items-center gap-2">
+            <Activity className="w-8 h-8 text-blue-500" />
+            Gold & Crypto Tracker
+          </h1>
+          <p className="text-gray-600 mt-1">Real-time prices, analysis & simulated trading</p>
+        </header>
+
+        <PortfolioSummary />
+
+        {/* Gold Section */}
+        <section className="mb-8">
+          <h2 className="text-xl font-semibold text-gray-800 mb-4 flex items-center gap-2">
+            <span className="w-2 h-2 rounded-full bg-yellow-500"></span>
+            Gold
+          </h2>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {goldPrices.map((price) => (
+              <PriceCard key={price.symbol} asset={price} />
+            ))}
+          </div>
+        </section>
+
+        {/* Crypto Section */}
+        <section className="mb-8">
+          <h2 className="text-xl font-semibold text-gray-800 mb-4 flex items-center gap-2">
+            <span className="w-2 h-2 rounded-full bg-blue-500"></span>
+            Cryptocurrency
+          </h2>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+            {cryptoPrices.map((price) => (
+              <PriceCard key={price.symbol} asset={price} />
+            ))}
+          </div>
+        </section>
+      </div>
+    </main>
+  );
+}
+```
+
+**frontend/src/components/PriceCard.tsx**:
+```tsx
+"use client";
+
+import { TrendingUp, TrendingDown } from "lucide-react";
+
+interface AssetPrice {
+  symbol: string;
+  name: string;
+  price: number;
+  change_24h: number;
+}
+
+export default function PriceCard({ asset }: { asset: AssetPrice }) {
+  const isPositive = (asset.change_24h || 0) >= 0;
+  const changePercent = (asset.change_24h || 0).toFixed(2);
+
+  return (
+    <div className="bg-white rounded-lg shadow-md p-4 hover:shadow-lg transition-shadow">
+      <div className="flex justify-between items-start mb-2">
+        <div>
+          <h3 className="font-semibold text-gray-900">{asset.name}</h3>
+          <span className="text-sm text-gray-500">{asset.symbol}</span>
+        </div>
+        <div className={`flex items-center gap-1 text-sm font-medium ${isPositive ? "text-green-600" : "text-red-600"}`}>
+          {isPositive ? <TrendingUp className="w-4 h-4" /> : <TrendingDown className="w-4 h-4" />}
+          {isPositive ? "+" : ""}{changePercent}%
+        </div>
+      </div>
+      <div className="text-2xl font-bold text-gray-900">
+        ${asset.price?.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+      </div>
+    </div>
+  );
+}
+```
+
+**frontend/src/components/PortfolioSummary.tsx**:
+```tsx
+"use client";
+
+import { useEffect, useState } from "react";
+import { fetchAPI } from "@/lib/api";
+import { Wallet, TrendingUp, TrendingDown } from "lucide-react";
+
+interface PortfolioData {
+  balance: number;
+  total_value: number;
+  total_pnl: number;
+  total_pnl_percent: number;
+  holdings: Array<{
+    symbol: string;
+    asset_name: string;
+    quantity: number;
+    current_price: number;
+    market_value: number;
+    pnl: number;
+    pnl_percent: number;
+  }>;
+}
+
+export default function PortfolioSummary() {
+  const [portfolio, setPortfolio] = useState<PortfolioData | null>(null);
+
+  useEffect(() => {
+    async function loadPortfolio() {
+      try {
+        const data = await fetchAPI("/api/trading/portfolio");
+        if (!data.error) {
+          setPortfolio(data);
+        }
+      } catch (e) {
+        console.error("Failed to load portfolio:", e);
+      }
+    }
+    loadPortfolio();
+  }, []);
+
+  if (!portfolio) return null;
+
+  const isPositive = portfolio.total_pnl >= 0;
+
+  return (
+    <div className="bg-white rounded-lg shadow-md p-6 mb-8">
+      <div className="flex items-center gap-2 mb-4">
+        <Wallet className="w-6 h-6 text-blue-500" />
+        <h2 className="text-xl font-semibold text-gray-900">Portfolio</h2>
+      </div>
+      
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+        <div className="bg-gray-50 rounded-lg p-4">
+          <p className="text-sm text-gray-600">Cash Balance</p>
+          <p className="text-xl font-bold text-gray-900">
+            ${portfolio.balance?.toLocaleString("en-US", { minimumFractionDigits: 2 })}
+          </p>
+        </div>
+        <div className="bg-gray-50 rounded-lg p-4">
+          <p className="text-sm text-gray-600">Total Value</p>
+          <p className="text-xl font-bold text-gray-900">
+            ${portfolio.total_value?.toLocaleString("en-US", { minimumFractionDigits: 2 })}
+          </p>
+        </div>
+        <div className={`rounded-lg p-4 ${isPositive ? "bg-green-50" : "bg-red-50"}`}>
+          <p className="text-sm text-gray-600">Total P&L</p>
+          <div className={`flex items-center gap-1 text-xl font-bold ${isPositive ? "text-green-700" : "text-red-700"}`}>
+            {isPositive ? <TrendingUp className="w-5 h-5" /> : <TrendingDown className="w-5 h-5" />}
+            {isPositive ? "+" : ""}${portfolio.total_pnl?.toLocaleString("en-US", { minimumFractionDigits: 2 })}
+            <span className="text-sm font-normal">({portfolio.total_pnl_percent?.toFixed(2)}%)</span>
+          </div>
+        </div>
+      </div>
+
+      {portfolio.holdings && portfolio.holdings.length > 0 && (
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="bg-gray-100">
+              <tr>
+                <th className="text-left p-2 rounded-tl-lg">Asset</th>
+                <th className="text-right p-2">Quantity</th>
+                <th className="text-right p-2">Price</th>
+                <th className="text-right p-2">Value</th>
+                <th className="text-right p-2 rounded-tr-lg">P&L</th>
+              </tr>
+            </thead>
+            <tbody>
+              {portfolio.holdings.map((h) => (
+                <tr key={h.symbol} className="border-b border-gray-100">
+                  <td className="p-2">
+                    <span className="font-medium">{h.asset_name}</span>
+                    <span className="text-gray-500 ml-1">{h.symbol}</span>
+                  </td>
+                  <td className="text-right p-2">{h.quantity?.toFixed(4)}</td>
+                  <td className="text-right p-2">${h.current_price?.toLocaleString("en-US", { minimumFractionDigits: 2 })}</td>
+                  <td className="text-right p-2">${h.market_value?.toLocaleString("en-US", { minimumFractionDigits: 2 })}</td>
+                  <td className={`text-right p-2 font-medium ${h.pnl >= 0 ? "text-green-600" : "text-red-600"}`}>
+                    {h.pnl >= 0 ? "+" : ""}${h.pnl?.toLocaleString("en-US", { minimumFractionDigits: 2 })}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+```
+
+**frontend/src/app/asset/[symbol]/page.tsx** - 资产详情页：
+```tsx
+"use client";
+
+import { useEffect, useState } from "react";
+import { useParams } from "next/navigation";
+import { fetchAPI } from "@/lib/api";
+import PriceChart from "@/components/PriceChart";
+import AnalysisPanel from "@/components/AnalysisPanel";
+import TradingPanel from "@/components/TradingPanel";
+import { ArrowLeft } from "lucide-react";
+import Link from "next/link";
+
+interface PriceHistory {
+  price: number;
+  timestamp: string;
+}
+
+export default function AssetDetail() {
+  const params = useParams();
+  const symbol = params.symbol as string;
+  const [history, setHistory] = useState<PriceHistory[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    async function loadHistory() {
+      try {
+        const data = await fetchAPI(`/api/prices/history/${symbol}?hours=168`); // 7天
+        setHistory(data.history || []);
+      } catch (e) {
+        console.error("Failed to load history:", e);
+      } finally {
+        setLoading(false);
+      }
+    }
+    if (symbol) loadHistory();
+  }, [symbol]);
+
+  return (
+    <main className="min-h-screen bg-gray-50 p-6">
+      <div className="max-w-7xl mx-auto">
+        <Link href="/" className="flex items-center gap-2 text-gray-600 hover:text-gray-900 mb-6">
+          <ArrowLeft className="w-4 h-4" />
+          Back to Dashboard
+        </Link>
+
+        <h1 className="text-3xl font-bold text-gray-900 mb-8">{symbol}</h1>
+
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          <div className="lg:col-span-2">
+            <PriceChart symbol={symbol} history={history} loading={loading} />
+            <AnalysisPanel symbol={symbol} />
+          </div>
+          <div>
+            <TradingPanel symbol={symbol} />
+          </div>
+        </div>
+      </div>
+    </main>
+  );
+}
+```
+
+**frontend/src/components/PriceChart.tsx**:
+```tsx
+"use client";
+
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
+
+interface PriceHistory {
+  price: number;
+  timestamp: string;
+}
+
+export default function PriceChart({
+  symbol,
+  history,
+  loading,
+}: {
+  symbol: string;
+  history: PriceHistory[];
+  loading: boolean;
+}) {
+  if (loading) {
+    return (
+      <div className="bg-white rounded-lg shadow-md p-6 h-96 flex items-center justify-center">
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500"></div>
+      </div>
+    );
+  }
+
+  const data = history.map((h) => ({
+    time: new Date(h.timestamp).toLocaleDateString("en-US", { month: "short", day: "numeric", hour: "2-digit" }),
+    price: h.price,
+  }));
+
+  return (
+    <div className="bg-white rounded-lg shadow-md p-6 mb-6">
+      <h2 className="text-lg font-semibold text-gray-900 mb-4">Price History (7 Days)</h2>
+      <ResponsiveContainer width="100%" height={300}>
+        <LineChart data={data}>
+          <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+          <XAxis dataKey="time" tick={{ fontSize: 12 }} angle={-45} textAnchor="end" height={60} />
+          <YAxis domain={["auto", "auto"]} tick={{ fontSize: 12 }} />
+          <Tooltip
+            formatter={(value: number) => [`$${value?.toLocaleString("en-US", { minimumFractionDigits: 2 })}`, "Price"]}
+            labelStyle={{ color: "#374151" }}
+          />
+          <Line type="monotone" dataKey="price" stroke="#3b82f6" strokeWidth={2} dot={false} />
+        </LineChart>
+      </ResponsiveContainer>
+    </div>
+  );
+}
+```
+
+**frontend/src/components/AnalysisPanel.tsx**:
+```tsx
+"use client";
+
+import { useEffect, useState } from "react";
+import { fetchAPI } from "@/lib/api";
+import { Activity, TrendingUp, TrendingDown, Minus } from "lucide-react";
+
+interface AnalysisData {
+  rsi: number;
+  macd: number;
+  macd_signal: number;
+  trend_direction: string;
+  signal_strength: number;
+  bollinger_bands: { upper: number; middle: number; lower: number };
+  key_levels: { support: number; resistance: number };
+  notes: string;
+}
+
+interface PredictionData {
+  timeframe: string;
+  direction: string;
+  confidence: number;
+  predicted_change: number;
+  reasoning: string;
+}
+
+export default function AnalysisPanel({ symbol }: { symbol: string }) {
+  const [analysis, setAnalysis] = useState<AnalysisData | null>(null);
+  const [predictions, setPredictions] = useState<PredictionData[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    async function loadData() {
+      try {
+        const [analysisData, predictionData] = await Promise.all([
+          fetchAPI(`/api/analysis/signals/${symbol}`),
+          fetchAPI(`/api/analysis/predictions/${symbol}`),
+        ]);
+        if (!analysisData.error) setAnalysis(analysisData);
+        setPredictions(predictionData.predictions || []);
+      } catch (e) {
+        console.error("Failed to load analysis:", e);
+      } finally {
+        setLoading(false);
+      }
+    }
+    loadData();
+  }, [symbol]);
+
+  if (loading) {
+    return (
+      <div className="bg-white rounded-lg shadow-md p-6">
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500"></div>
+      </div>
+    );
+  }
+
+  if (!analysis) {
+    return (
+      <div className="bg-white rounded-lg shadow-md p-6">
+        <p className="text-gray-500">No analysis data available yet.</p>
+      </div>
+    );
+  }
+
+  const trendIcon =
+    analysis.trend_direction === "bullish" ? (
+      <TrendingUp className="w-5 h-5 text-green-500" />
+    ) : analysis.trend_direction === "bearish" ? (
+      <TrendingDown className="w-5 h-5 text-red-500" />
+    ) : (
+      <Minus className="w-5 h-5 text-gray-500" />
+    );
+
+  return (
+    <div className="bg-white rounded-lg shadow-md p-6 mb-6">
+      <div className="flex items-center gap-2 mb-4">
+        <Activity className="w-5 h-5 text-blue-500" />
+        <h2 className="text-lg font-semibold text-gray-900">Technical Analysis</h2>
+      </div>
+
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
+        <div className="bg-gray-50 rounded-lg p-3">
+          <p className="text-xs text-gray-600">RSI (14)</p>
+          <p className={`text-lg font-bold ${analysis.rsi > 70 ? "text-red-600" : analysis.rsi < 30 ? "text-green-600" : "text-gray-900"}`}>
+            {analysis.rsi?.toFixed(1)}
+          </p>
+        </div>
+        <div className="bg-gray-50 rounded-lg p-3">
+          <p className="text-xs text-gray-600">MACD</p>
+          <p className="text-lg font-bold text-gray-900">{analysis.macd?.toFixed(4)}</p>
+        </div>
+        <div className="bg-gray-50 rounded-lg p-3">
+          <p className="text-xs text-gray-600">Trend</p>
+          <div className="flex items-center gap-1">
+            {trendIcon}
+            <span className="text-sm font-medium capitalize">{analysis.trend_direction}</span>
+          </div>
+        </div>
+        <div className="bg-gray-50 rounded-lg p-3">
+          <p className="text-xs text-gray-600">Strength</p>
+          <p className="text-lg font-bold text-gray-900">{analysis.signal_strength}/10</p>
+        </div>
+      </div>
+
+      {analysis.bollinger_bands && (
+        <div className="mb-4">
+          <p className="text-sm text-gray-600 mb-2">Bollinger Bands</p>
+          <div className="flex gap-2 text-sm">
+            <span className="bg-red-50 text-red-700 px-2 py-1 rounded">Upper: ${analysis.bollinger_bands.upper?.toLocaleString()}</span>
+            <span className="bg-gray-100 text-gray-700 px-2 py-1 rounded">Middle: ${analysis.bollinger_bands.middle?.toLocaleString()}</span>
+            <span className="bg-green-50 text-green-700 px-2 py-1 rounded">Lower: ${analysis.bollinger_bands.lower?.toLocaleString()}</span>
+          </div>
+        </div>
+      )}
+
+      {predictions.length > 0 && (
+        <div>
+          <p className="text-sm text-gray-600 mb-2">Predictions</p>
+          <div className="space-y-2">
+            {predictions.map((p) => (
+              <div key={p.timeframe} className="flex justify-between items-center bg-gray-50 rounded-lg p-3">
+                <div>
+                  <span className="text-sm font-medium">{p.timeframe}</span>
+                  <span className={`ml-2 text-sm ${p.direction === "up" ? "text-green-600" : p.direction === "down" ? "text-red-600" : "text-gray-600"}`}>
+                    {p.direction === "up" ? "↑" : p.direction === "down" ? "↓" : "→"} {p.direction}
+                  </span>
+                </div>
+                <div className="text-right">
+                  <p className="text-sm font-medium">{p.confidence}% confidence</p>
+                  <p className="text-xs text-gray-500">{p.predicted_change > 0 ? "+" : ""}{p.predicted_change}% expected</p>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+```
+
+**frontend/src/components/TradingPanel.tsx**:
+```tsx
+"use client";
+
+import { useState } from "react";
+import { fetchAPI } from "@/lib/api";
+import { ArrowUpCircle, ArrowDownCircle } from "lucide-react";
+
+export default function TradingPanel({ symbol }: { symbol: string }) {
+  const [quantity, setQuantity] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [result, setResult] = useState<any>(null);
+  const [error, setError] = useState("");
+
+  async function handleBuy() {
+    setLoading(true);
+    setError("");
+    setResult(null);
+    try {
+      const data = await fetchAPI("/api/trading/buy", {
+        method: "POST",
+        body: JSON.stringify({ symbol, quantity: parseFloat(quantity) }),
+      });
+      if (data.success) {
+        setResult(data);
+      } else {
+        setError(data.error || "Buy failed");
+      }
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleSell() {
+    setLoading(true);
+    setError("");
+    setResult(null);
+    try {
+      const data = await fetchAPI("/api/trading/sell", {
+        method: "POST",
+        body: JSON.stringify({ symbol, quantity: parseFloat(quantity) }),
+      });
+      if (data.success) {
+        setResult(data);
+      } else {
+        setError(data.error || "Sell failed");
+      }
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <div className="bg-white rounded-lg shadow-md p-6">
+      <h2 className="text-lg font-semibold text-gray-900 mb-4">Trade {symbol}</h2>
+
+      <div className="mb-4">
+        <label className="block text-sm text-gray-600 mb-1">Quantity</label>
+        <input
+          type="number"
+          step="0.0001"
+          value={quantity}
+          onChange={(e) => setQuantity(e.target.value)}
+          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+          placeholder="Enter quantity..."
+        />
+      </div>
+
+      <div className="grid grid-cols-2 gap-3">
+        <button
+          onClick={handleBuy}
+          disabled={loading || !quantity}
+          className="flex items-center justify-center gap-2 bg-green-600 text-white py-2 px-4 rounded-lg hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          <ArrowUpCircle className="w-4 h-4" />
+          Buy
+        </button>
+        <button
+          onClick={handleSell}
+          disabled={loading || !quantity}
+          className="flex items-center justify-center gap-2 bg-red-600 text-white py-2 px-4 rounded-lg hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          <ArrowDownCircle className="w-4 h-4" />
+          Sell
+        </button>
+      </div>
+
+      {loading && <p className="mt-3 text-sm text-gray-500">Processing...</p>}
+      {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
+      {result && (
+        <div className="mt-3 bg-green-50 rounded-lg p-3">
+          <p className="text-sm text-green-800 font-medium">Transaction successful!</p>
+          <p className="text-xs text-green-700 mt-1">
+            {result.quantity} {result.symbol} @ ${result.price?.toFixed(2)}
+          </p>
+          <p className="text-xs text-green-700">Fee: ${result.fee?.toFixed(2)}</p>
+          <p className="text-xs text-green-700">Balance: ${result.remaining_balance?.toFixed(2)}</p>
+        </div>
+      )}
+    </div>
+  );
+}
+```
+
+### 5. 配置 Next.js 开发服务器端口
+
+**frontend/package.json** 修改 scripts 部分：
+```json
+{
+  "scripts": {
+    "dev": "next dev -p 30306",
+    "build": "next build",
+    "start": "next start -p 30306",
+    "lint": "next lint"
+  }
+}
+```
+
+### 6. 验证
+创建完成后，运行构建验证：
+```bash
+cd /home/dev/data/project/gold-crypto-tracker/frontend
+npm run build
+```
+确认构建成功无错误。
+
+### 7. 文件清单确认
+完成后报告以下文件是否全部创建：
+- [ ] frontend/src/lib/api.ts
+- [ ] frontend/src/app/page.tsx
+- [ ] frontend/src/app/asset/[symbol]/page.tsx
+- [ ] frontend/src/components/PriceCard.tsx
+- [ ] frontend/src/components/PortfolioSummary.tsx
+- [ ] frontend/src/components/PriceChart.tsx
+- [ ] frontend/src/components/AnalysisPanel.tsx
+- [ ] frontend/src/components/TradingPanel.tsx
+- [ ] frontend/package.json (已修改端口)
+- [ ] npm run build 成功

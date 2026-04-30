@@ -1,0 +1,44 @@
+你正在为 Gold & Crypto Tracker 项目补全缺失功能。我是这个系统的主要用户之一，验收会非常严格。
+
+**项目目录**: /home/dev/data/project/gold-crypto-tracker/
+**技术栈**: Python FastAPI + Next.js 14 + Tailwind + Recharts
+
+## 当前状态
+后端 API 和基础页面已完成，但以下组件和功能缺失：
+
+### 必须补全的缺失项
+
+1. **前端组件** (frontend/src/components/):
+   - `IndicatorPanel.tsx` - 技术指标面板：展示RSI、MACD、布林带、EMA等指标数值，带颜色编码（bullish=绿色，bearish=红色，neutral=灰色）
+   - `PredictionCard.tsx` - 预测卡片：展示24h/7d/30d预测，包含方向（up/down/neutral）、置信度百分比、预测变化幅度、理由文本
+   - `TradeForm.tsx` - 交易表单：资产选择下拉框、数量输入、当前价格显示、预估金额、手续费显示、买入/卖出按钮
+   - `PortfolioView.tsx` - 资产视图：展示用户持仓列表（资产名、数量、平均成本、当前市值、盈亏百分比），以及总资产概览
+   - `LeaderboardTable.tsx` - 排行榜表格：排名、用户名、初始本金、当前总资产、收益率百分比、主持仓，支持排序
+
+2. **后端服务** (backend/services/):
+   - `user_service.py` - 用户服务：用户CRUD、查询用户列表、按ID查询
+
+3. **暗色主题** - 整个应用必须使用暗色主题（深蓝灰背景 #0f172a，卡片 #1e293b，文字白色 #f8fafc）
+
+4. **K线图支持** - 资产详情页使用 Recharts 的 ComposedChart 或自定义实现，展示开盘价/最高价/最低价/收盘价（OHLC），基于已有历史数据
+
+5. **数据生成** - 需要确保 analysis_signals 和 predictions 表有数据。可以：
+   - 在分析服务中实现信号生成逻辑（基于RSI、MACD、布林带规则引擎）
+   - 提供手动触发端点或确保定时任务能正确生成数据
+
+### 验收标准
+- 每个组件必须能独立渲染，不依赖未实现的props
+- 所有组件必须适配暗色主题
+- 交易表单必须能实际调用 /api/trading/buy 和 /api/trading/sell API
+- 排行榜必须展示真实数据
+- 预测卡片必须展示真实或模拟的预测数据
+- 页面之间导航正常
+
+### 重要规则
+- 不要修改已有正常工作代码
+- 保持现有代码风格一致
+- 使用 TypeScript 严格类型
+- 所有API调用使用前端 lib/api.ts 中的封装
+- 暗色主题通过 Tailwind className 实现（bg-slate-900, bg-slate-800, text-white 等）
+
+请逐项完成，完成后告诉我每个文件的路径。
